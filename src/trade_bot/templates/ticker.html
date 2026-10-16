@@ -1,0 +1,505 @@
+{% extends "base.html" %}
+{% set active = "trades" %}
+{% block title %}{{ symbol }} · Copy Trade{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ symbol }}</h1>
+    <p class="lede">{{ company or 'Congressional activity and coverage' }}{% if industry %}
+      <span class="muted">&middot; {{ industry }}</span>{% endif %}</p>
+  </div>
+  <div class="stat-row">
+    <div class="stat"><span class="stat-value">{{ last_price|money }}</span><span class="stat-label">last close {{ last_date or '' }}</span></div>
+    <div class="stat"><span class="stat-value">{{ trades|length }}</span><span class="stat-label">disclosures</span></div>
+  </div>
+</div>
+
+{% if history %}
+<section class="card">
+  <h2>Price, last {{ history|length }} sessions</h2>
+  {% if markers_total > markers_shown %}
+  <p class="muted small">Marking the {{ markers_shown }} most recent of
+    {{ markers_total }} disclosures. All {{ markers_total }} are listed below.</p>
+  {% endif %}
+  {# preserveAspectRatio is dropped: markers and text must not be stretched
+     horizontally with the plot. #}
+  <div class="chartwrap" id="chartwrap">
+    <svg id="spark" viewBox="0 0 900 280" class="sparkline" role="img"
+         aria-label="Price with congressional trades marked at both the transaction date and the date each was disclosed"></svg>
+    <aside class="tradepanel" id="tradepanel" hidden>
+      <button type="button" class="tradepanel-close" id="tradepanel-close" aria-label="Close trade details">&times;</button>
+      <div id="tradepanel-body"></div>
+    </aside>
+  </div>
+  <script id="price-data" type="application/json">{{ history|tojson }}</script>
+  <script id="marker-data" type="application/json">{{ markers|tojson }}</script>
+  <p class="chart-legend">
+    <a href="https://finance.yahoo.com/quote/{{ symbol }}" target="_blank" rel="noopener noreferrer">
+      Full chart on Yahoo Finance &nearr;</a> &mdash; this one is here for the disclosures.<br>
+    <b>&#9650; bought</b> · <b>&#9660; sold</b> &mdash; hollow is the member's own price, which
+    no one outside Congress could pay; solid is the filing, the first price you could, and the
+    shaded span between them is the reporting lag.
+    <b>Colour is profit on the trade</b>, measured from the filed price and read in the
+    direction they took: a sale followed by a fall is green, because exiting before a drop is
+    a good trade for the same reason a short is.
+  </p>
+</section>
+{% endif %}
+
+{% if positions %}
+<section class="card">
+  <div class="section-head">
+    <h2>Who is building a position, and who is leaving one</h2>
+    <span class="muted small">
+      {{ accumulation.accumulating }} accumulating &middot;
+      {{ accumulation.trimming }} trimming &middot;
+      {{ accumulation.selling_down }} selling down &middot;
+      {{ accumulation.closed }} round trips
+    </span>
+  </div>
+  <p class="muted small">
+    The same disclosures below, folded into a running position per member. Congress
+    does not disclose share counts, so exposure is the sum of the bracket midpoints
+    and the range beneath it is the same walk done with the floors and ceilings.
+    <em>Round trip</em> means they sold at least as much as they were ever seen buying,
+    not that they hold none &mdash; a sale does not state what fraction of a holding it
+    was. <em>Selling down</em> means sales only: they are leaving a position nothing here
+    watched them build.
+  </p>
+  <table class="ledger">
+    <thead>
+      <tr>
+        <th>Member</th>
+        <th>Doing what</th>
+        <th class="num">Net disclosed</th>
+        <th>Sequence</th>
+        <th class="num">A copier would be</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for position in positions %}
+      <tr>
+        <td>
+          <a href="/members/{{ position.politician_id }}">{{ position.member_name }}</a>
+          {% for seat in (records | selectattr('politician_id', 'equalto', position.politician_id) | map(attribute='committees') | first) or [] %}
+          <span class="remit" title="{{ seat.committee_name }} covers {{ seat.jurisdiction or industry }}">on the overseeing committee</span>
+          {% endfor %}
+        </td>
+        <td><span class="flow flow--{{ position.direction }}">{{ position.direction|replace('_', ' ') }}</span></td>
+        <td class="num">
+          <span class="exposure {{ 'exposure--pos' if position.net_exposure > 0 else ('exposure--neg' if position.net_exposure < 0 else '') }}"
+                title="Sum of the disclosed bracket midpoints, buys less sales. An estimate built on estimates; the range beneath it is what the filings actually bound.">
+            {{ position.net_exposure|money }}</span>
+          <span class="exposure-bounds">{{ position.net_low|money }} to {{ position.net_high|money }}</span>
+        </td>
+        <td class="small">
+          {{ position.buy_count }} buy{{ '' if position.buy_count == 1 else 's' }}{% if position.sell_count %},
+          {{ position.sell_count }} sale{{ '' if position.sell_count == 1 else 's' }}{% endif %}
+          <span class="lots">
+            first filed {{ position.first_seen|shortdate }}{% if position.days_open %}, latest
+            {{ position.days_open }}d later{% endif %}
+          </span>
+        </td>
+        <td class="num">
+          {% if position.unrealized_return is not none %}
+          <span class="ret-yours {{ 'pos' if position.unrealized_return > 0 else 'neg' }}">{{ position.unrealized_return|pct }}</span>
+          <span class="ret-basis">from {{ position.copier_basis|money }}, the filing-date price</span>
+          {% else %}<span class="muted">&mdash;</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<div class="two-col">
+  <section class="card">
+    <h2>Every disclosure</h2>
+    <p class="muted small">
+      {{ trades|length }} disclosure{{ '' if trades|length == 1 else 's' }} from
+      {{ records|length }} member{{ '' if records|length == 1 else 's' }} &mdash;
+      {{ buy_count }} bought, {{ sell_count }} sold.
+      {% if buy_count > sell_count %}Net {{ buy_count - sell_count }} more buying than selling.
+      {% elif sell_count > buy_count %}Net {{ sell_count - buy_count }} more selling than buying.
+      {% else %}Buying and selling are even.{% endif %}
+    </p>
+
+    {# Grouped by member, so a later sale reads against the buy it followed
+       rather than appearing as an unrelated line in a flat list. #}
+    {% for record in records %}
+    <div class="record">
+      <div class="record-head">
+        <a href="/members/{{ record.politician_id }}">{{ record.name }}</a>
+        {% if record.party %}<span class="party party--{{ record.party|lower }}">{{ record.party[0] }}</span>{% endif %}
+        <span class="record-tally">
+          {{ record.buys }} buy{{ '' if record.buys == 1 else 's' }}{% if record.sells %},
+          {{ record.sells }} sale{{ '' if record.sells == 1 else 's' }}{% endif %}
+        </span>
+      </div>
+      <table class="buyers table--compact">
+        <tbody>
+        {% for trade in record.rows %}
+        <tr>
+          <td data-label="Action" style="width:88px">
+            <span class="tag tag--{{ 'buy' if 'purchase' in trade.transaction_type else 'sell' }}">
+              {{ trade.transaction_type|replace('_',' ') }}</span>
+          </td>
+          <td data-label="Traded then filed">
+            {# The STOCK Act allows 45 days. Anything past a year is either a
+               serious late filing or a misparsed date, and in both cases it
+               should not be drawn as an ordinary bar. #}
+            <span class="lag {{ 'lag--suspect' if trade.reporting_lag_days > MAX_LAG_DAYS }}"
+                  title="{{ trade.reporting_lag_days }} days passed before this was public{% if trade.reporting_lag_days > MAX_LAG_DAYS %} — far beyond the 45-day filing window; treat the transaction date as unverified{% endif %}">
+              <em style="width: {{ [trade.reporting_lag_days, 90]|min }}px"></em>+{{ trade.reporting_lag_days }}d
+              {%- if trade.reporting_lag_days > MAX_LAG_DAYS %} ⚑{% endif %}
+            </span>
+            <span class="lag-dates">{{ trade.transaction_date|shortdate }} &rarr; {{ trade.disclosure_date|shortdate }}</span>
+          </td>
+          <td class="num" data-label="Size as filed">
+            <span class="band" title="Bracket {{ trade.amount_low|band_letter }} as checked on the filing">
+              {{ trade.amount_low|band_letter }}</span>
+            <span class="band-range">{{ trade.amount_low|bracket(trade.amount_high) }}</span>
+            {# One member routinely files the same holding once per account, so
+               identical lines are separate lots rather than a duplicate. Saying
+               so beats printing the row twice with nothing to distinguish it. #}
+            {% if trade.lots > 1 %}<span class="lots"
+              title="{{ trade.lots }} identical lines in this filing — one per account, not {{ trade.lots }} separate decisions">&times;{{ trade.lots }} lots</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endfor %}
+
+    <details class="prov">
+      <summary>What the size brackets mean</summary>
+      <div class="prov-body">
+        <p style="margin:0 0 8px">Members disclose a <strong>range</strong>, never an amount.
+        Every figure on this site keeps the range for that reason &mdash; a midpoint
+        would invent precision the filing never had.</p>
+        <table class="table--compact">
+          <tbody>
+          {% for letter, _floor, span in AMOUNT_BANDS %}
+          <tr><td style="width:34px"><span class="band">{{ letter }}</span></td>
+              <td>{{ span }}</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        <p style="margin:8px 0 0">
+          The filing deadline is the same for every bracket: within <strong>30 days</strong>
+          of being notified of a trade, and no later than <strong>45 days</strong> after it.
+          Size changes what must be reported, not how fast &mdash; transactions under
+          $1,000 need no report at all. Anything above shows a lag well past 45 days is a
+          late filing, not a larger allowance.
+        </p>
+      </div>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>Coverage &amp; mentions</h2>
+    {% if mentions %}
+    <h3 class="subhead">Political mentions</h3>
+    <ul class="news-list">
+      {% for mention in mentions %}
+      <li>
+        <a href="{{ mention.url }}" target="_blank" rel="noopener">{{ mention.headline }}</a>
+        <span class="news-meta">
+          <span class="sentiment sentiment--{{ mention.stance }}">{{ mention.stance }}</span>
+          {{ mention.figure }} · confidence {{ '%.0f%%'|format(mention.confidence * 100) }} · {{ mention.published_at|ago }}
+        </span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% if news %}
+    <h3 class="subhead">Headlines</h3>
+    <ul class="news-list">
+      {% for story in news %}
+      <li>
+        <a href="{{ story.url }}" target="_blank" rel="noopener">{{ story.title }}</a>
+        <span class="news-meta">
+          <span class="sentiment sentiment--{{ story.sentiment_label }}">{{ story.sentiment_label }}</span>
+          {{ story.source }} · {{ story.published_at|ago }}
+        </span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% elif not mentions %}<p class="muted">No coverage stored for {{ symbol }} yet.</p>{% endif %}
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  (function () {
+    const node = document.getElementById("price-data");
+    if (!node) return;
+    const rows = JSON.parse(node.textContent);
+    if (rows.length < 2) return;
+    const marks = JSON.parse(document.getElementById("marker-data").textContent || "[]");
+    const SYMBOL = {{ symbol|tojson }};
+
+    // Colours come from the stylesheet so the chart follows the theme instead
+    // of hard-coding a palette the page no longer uses.
+    const css = getComputedStyle(document.documentElement);
+    const tone = (name, fallback) => (css.getPropertyValue(name) || fallback).trim();
+    const INK = tone("--ink", "#1d1a24"), DIM = tone("--ink-dim", "#6a6472");
+    const MARK = tone("--annot", "#4b3f8f");
+    const UP = tone("--ledger", "#1f6b45"), DOWN = tone("--stamp", "#a8210f");
+    const STOCK = tone("--stock-2", "#eee");
+    // A triangle points the way the member traded. Colour is not spent on
+    // direction, so it stays available for the only thing a price chart
+    // should colour: whether the position is up or down since it was filed.
+    const tri = (x, y, dir, filled, col) => {
+      const h = dir === "buy" ? -1 : 1;
+      return `<path d="M ${x} ${y + h * 6.5} L ${x + 5.5} ${y - h * 3.5} L ${x - 5.5} ${y - h * 3.5} Z"
+               fill="${filled ? col : "none"}" stroke="${col}" stroke-width="1.8" stroke-linejoin="round" />`;
+    };
+
+    // Profit on the trade, from the filed price forward and read in the
+    // direction the member actually took. A sale followed by a fall is a good
+    // exit, exactly as a short is — so "down" is not automatically bad, and
+    // colour has to follow the position rather than the price line.
+    // Anything inside this band is noise over a multi-month window and must
+    // not be coloured as a result either way.
+    const FLAT = 0.03;
+    const outcome = (m) => {
+      const at = closes[m.filed], now = closes[closes.length - 1];
+      if (!at) return { move: null, col: DIM, verdict: "none" };
+      const move = (now - at) / at;
+      // The path, not just the endpoints. A sale that preceded a large rise
+      // which later retraced is not a good exit, but end-to-end arithmetic
+      // cannot tell it apart from a flat market.
+      const after = closes.slice(m.filed);
+      const peak = Math.max(...after), trough = Math.min(...after);
+      const runUp = (peak - at) / at, drawDown = (trough - at) / at;
+      if (Math.abs(move) < FLAT) return { move, runUp, drawDown, verdict: "flat", col: DIM };
+      const good = m.kind === "buy" ? move > 0 : move < 0;
+      return { move, runUp, drawDown, verdict: good ? "good" : "bad", col: good ? UP : DOWN };
+    };
+
+    const W = 900, TOP = 16, BOT = 210;
+    const closes = rows.map((r) => r.close);
+    const min = Math.min(...closes), max = Math.max(...closes);
+    const span = (max - min) || 1;
+    const X = (i) => (i / (closes.length - 1)) * (W - 20) + 10;
+    const Y = (c) => BOT - ((c - min) / span) * (BOT - TOP);
+
+    const line = closes.map((c, i) => `${X(i).toFixed(1)},${Y(c).toFixed(1)}`).join(" ");
+    let out = "", shading = [];
+    const money = (v) => "$" + (v >= 1000 ? v.toFixed(0) : v.toFixed(2));
+
+    // Four gridlines carrying their price. Without them the chart shows shape
+    // but no magnitude, so a 2% move and a 40% move look the same.
+    let axis = "";
+    for (let g = 0; g <= 3; g++) {
+      const v = min + (span * g) / 3;
+      const y = Y(v);
+      axis += `<line x1="10" y1="${y}" x2="${W - 46}" y2="${y}" stroke="${DIM}" opacity=".18" stroke-dasharray="2 4" />
+               <text x="${W - 42}" y="${y + 3.5}" fill="${DIM}" font-family="Menlo,monospace"
+                     font-size="10">${money(v)}</text>`;
+    }
+
+    // Blackout spans first, so they sit under the price line. Between a trade
+    // and the filing that revealed it the information did not exist for you;
+    // shading it stops that stretch reading as an opportunity.
+    marks.forEach((m) => {
+      if (m.traded === null || m.traded === m.filed) return;
+      const a = X(m.traded), b = X(m.filed);
+      shading.push(`<rect x="${a}" y="${TOP - 12}" width="${b - a}" height="${BOT - TOP + 12}"
+               fill="${DIM}" opacity="0.06" />`);
+    });
+
+
+
+    // Pack the lag brackets into lanes. A fixed stagger is not enough: when
+    // several members trade within days of each other their brackets share a
+    // lane and the labels overlap into nonsense -- "+39d" and "+16d" printed
+    // on top of each other read as "+3946d". Each bracket takes the first lane
+    // it fits in, measured against the label rather than the bracket, since
+    // the text is wider than a short span and is what actually collides.
+    const LABEL_HALF = 21, GAP = 6, LANE_H = 13;
+    const laneEnds = [];
+    const placed = marks.map((m) => {
+      if (m.traded === null) return { m, lane: null };
+      const a = X(m.traded), b = X(m.filed), mid = (a + b) / 2;
+      const from = Math.min(a, mid - LABEL_HALF);
+      const to = Math.max(b, mid + LABEL_HALF);
+      let lane = laneEnds.findIndex((end) => from > end + GAP);
+      if (lane === -1) { lane = laneEnds.length; laneEnds.push(to); }
+      else laneEnds[lane] = to;
+      return { m, lane, a, b, mid };
+    });
+
+    // Give the brackets exactly the room they need, no more.
+    const lanes = Math.max(laneEnds.length, 1);
+    const headroom = lanes * LANE_H + 8;
+    const svg = document.getElementById("spark");
+    svg.setAttribute("viewBox", `0 0 ${W} ${BOT + 46 + headroom}`);
+    const shift = headroom;
+
+    // Shading under the price line, both below the bracket lanes.
+    out += `<g transform="translate(0 ${shift})">${axis}${shading.join("")}
+             <polyline fill="none" stroke="${INK}" stroke-width="1.6"
+                       stroke-linejoin="round" points="${line}" /></g>`;
+
+    placed.forEach((p, pi) => {
+      p.i = pi;
+      const m = p.m;
+      const res = outcome(m);
+      const c = res.col;
+      const yF = Y(closes[m.filed]) + shift;
+      if (p.lane !== null) {
+        const ly = 10 + p.lane * LANE_H;
+        const yT = Y(closes[m.traded]) + shift;
+        out += `<line x1="${p.a}" y1="${yT}" x2="${p.b}" y2="${yF}" stroke="${c}"
+                 stroke-width="1.3" stroke-dasharray="3 3" opacity="0.8" />`;
+        out += `<line x1="${p.a}" y1="${ly + 9}" x2="${p.b}" y2="${ly + 9}" stroke="${c}" stroke-width="1" />
+                <line x1="${p.a}" y1="${ly + 5}" x2="${p.a}" y2="${ly + 13}" stroke="${c}" stroke-width="1" />
+                <line x1="${p.b}" y1="${ly + 5}" x2="${p.b}" y2="${ly + 13}" stroke="${c}" stroke-width="1" />
+                <rect x="${p.mid - LABEL_HALF}" y="${ly - 2}" width="${LABEL_HALF * 2}" height="12" fill="${STOCK}" />
+                <text x="${p.mid}" y="${ly + 7}" text-anchor="middle" fill="${c}"
+                      font-family="Menlo,monospace" font-size="10">+${m.lag}d</text>`;
+        out += tri(p.a, yT, m.kind, false, c);
+      }
+      out += tri(X(m.filed), yF, m.kind, true, c);
+
+      // Generous invisible targets over the ring, the dot and the lag bracket.
+      // The marks themselves are far too small to aim at.
+      const hit = `class="hit" data-i="${p.i}" tabindex="0" role="button"
+                   aria-label="${m.name}, ${m.kind === "buy" ? "bought" : "sold"} ${m.traded_on}, filed ${m.filed_on}"`;
+      if (p.lane !== null) {
+        const ly = 10 + p.lane * LANE_H;
+        out += `<rect ${hit} x="${p.a - 10}" y="${ly - 4}" width="${Math.max(p.b - p.a + 20, 30)}" height="18" fill="transparent" />`;
+        out += `<circle ${hit} cx="${p.a}" cy="${Y(closes[m.traded]) + shift}" r="11" fill="transparent" />`;
+      }
+      out += `<circle ${hit} cx="${X(m.filed)}" cy="${yF}" r="11" fill="transparent" />`;
+    });
+
+    out += `<text x="10" y="${BOT + shift + 22}" fill="${DIM}" font-family="Menlo,monospace" font-size="10">${rows[0].date}</text>
+            <text x="${W - 10}" y="${BOT + shift + 22}" fill="${DIM}" font-family="Menlo,monospace" font-size="10"
+                  text-anchor="end">${rows[rows.length - 1].date}</text>`;
+
+    svg.innerHTML = out;
+
+    // Selecting a trade. The chart gives up width rather than the panel
+    // overlaying it, so the price line stays readable while you read the
+    // detail beside it — and the SVG rescales on its own, since its height
+    // follows the viewBox.
+    const cross = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    cross.setAttribute("pointer-events", "none");
+    cross.style.display = "none";
+    svg.appendChild(cross);
+    svg.addEventListener("pointerleave", () => { cross.style.display = "none"; });
+    svg.addEventListener("pointermove", (e) => {
+      const box = svg.getBoundingClientRect();
+      const vx = ((e.clientX - box.left) / box.width) * W;
+      const i = Math.max(0, Math.min(closes.length - 1,
+        Math.round(((vx - 10) / (W - 20)) * (closes.length - 1))));
+      const x = X(i), y = Y(closes[i]) + shift;
+      const flip = x > W - 150;
+      cross.innerHTML =
+        `<line x1="${x}" y1="${shift}" x2="${x}" y2="${BOT + shift}" stroke="${DIM}" opacity=".45" />
+         <circle cx="${x}" cy="${y}" r="3.5" fill="${INK}" />
+         <text x="${flip ? x - 8 : x + 8}" y="${y - 9}" text-anchor="${flip ? "end" : "start"}"
+               fill="${INK}" font-family="Menlo,monospace" font-size="11">${money(closes[i])}</text>
+         <text x="${flip ? x - 8 : x + 8}" y="${y + 4}" text-anchor="${flip ? "end" : "start"}"
+               fill="${DIM}" font-family="Menlo,monospace" font-size="9.5">${rows[i].date}</text>`;
+      cross.style.display = "";
+    });
+
+    const wrap = document.getElementById("chartwrap");
+    const panel = document.getElementById("tradepanel");
+    const body = document.getElementById("tradepanel-body");
+    let selected = null;
+
+    // What the position has actually done since anyone could act on it. This
+    // is the only figure on the chart that earns a colour.
+    function sinceFiled(m) {
+      const { move, verdict, runUp, drawDown } = outcome(m);
+      if (move === null) return "";
+      const pct = (v) => `${v > 0 ? "+" : ""}${(v * 100).toFixed(1)}%`;
+      const tone = verdict === "good" ? "pos" : verdict === "bad" ? "neg" : "muted";
+
+      // Signed by intent, the same way the member's score is. A sale followed
+      // by a rise is a bad exit, and printing it as "+12.4%" in red asked the
+      // reader to hold two contradictory things at once: the colour said the
+      // trade went badly and the sign said it went up. The number now agrees
+      // with the colour, and the price move it came from is stated beneath so
+      // nothing is hidden by the convention.
+      const sell = m.kind !== "buy";
+      const result = sell ? -move : move;
+      // For a seller the best moment is the price's *lowest*, so the extremes
+      // swap as well as flip.
+      const best = sell ? -drawDown : runUp;
+      const worst = sell ? -runUp : drawDown;
+
+      const read = verdict === "flat"
+        ? "flat — too small to call either way"
+        : sell
+          ? (verdict === "good"
+              ? `${SYMBOL} fell ${pct(-move).replace("-", "")} after they filed, so the exit avoided that`
+              : `${SYMBOL} rose ${pct(move).replace("+", "")} after they filed, and a seller gives that up`)
+          : (verdict === "good" ? "copying this buy, you would be ahead" : "copying this buy, you would be behind");
+      return `<p class="tradepanel-move ${tone}">
+        ${pct(result)} on the ${sell ? "sale" : "buy"}
+        <span class="ret-basis">${read}</span></p>
+        <p class="tradepanel-path">Between filing and now the ${sell ? "sale" : "buy"} was worth
+        <b>${pct(best)}</b> at best and <b>${pct(worst)}</b> at worst.
+        The headline compares two dates only, so a round trip reads as flat.</p>`;
+    }
+
+    function paint(i) {
+      svg.querySelectorAll(".sel").forEach((n) => n.classList.remove("sel"));
+      if (i === null) return;
+      svg.querySelectorAll(`[data-i="${i}"]`).forEach((n) => n.classList.add("sel"));
+    }
+
+    function close() {
+      selected = null;
+      panel.hidden = true;
+      wrap.classList.remove("open");
+      paint(null);
+    }
+
+    function open(i) {
+      if (selected === i) return close();
+      selected = i;
+      const m = placed[i].m;
+      const verb = m.kind === "buy" ? "bought" : "sold";
+      body.innerHTML = `
+        <p class="tradepanel-kicker">${m.chamber === "senate" ? "Senate" : "House"}${m.party ? " · " + m.party : ""}</p>
+        <h3 class="tradepanel-name"><a href="/members/${m.member}">${m.name}</a></h3>
+        <p class="tradepanel-act"><span class="tag tag--${m.kind}">${m.type}</span>
+          <span class="band">${m.band}</span> <span class="band-range">${m.size}</span></p>
+        <dl class="tradepanel-dl">
+          <dt>Traded</dt><dd>${m.traded_on}</dd>
+          <dt>Filed</dt><dd>${m.filed_on}</dd>
+          <dt>Lag</dt><dd class="${m.lag > 45 ? "neg" : ""}">+${m.lag} days${m.lag > 45 ? " · past the 45-day window" : ""}</dd>
+        </dl>
+        ${sinceFiled(m)}
+        <p class="tradepanel-note">The hollow ring is the price ${m.name.split(" ").pop()} paid.
+          The filled dot is the first price anyone outside Congress could. Everything between
+          was unknowable, which is why returns here start at the filed date.</p>
+        <p class="tradepanel-note">${m.asset || ""}</p>`;
+      panel.hidden = false;
+      wrap.classList.add("open");
+      paint(i);
+    }
+
+    svg.addEventListener("click", (e) => {
+      const hit = e.target.closest("[data-i]");
+      if (hit) open(+hit.dataset.i);
+    });
+    svg.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      const hit = e.target.closest("[data-i]");
+      if (hit) { e.preventDefault(); open(+hit.dataset.i); }
+    });
+    document.getElementById("tradepanel-close").addEventListener("click", close);
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+  })();
+</script>
+{% endblock %}

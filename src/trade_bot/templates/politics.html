@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% set active = "politics" %}
+{% block title %}Politics · Copy Trade{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Political signals</h1>
+    <p class="lede">
+      Companies named in coverage of tracked figures. This is <strong>weaker evidence than a
+      disclosed trade</strong> &mdash; it comes from matching company names in headlines, so every
+      mention carries the confidence and the terms that produced it.
+    </p>
+  </div>
+</div>
+
+{% if summary %}
+<section class="card">
+  <div class="section-head">
+    <h2>Most-mentioned companies</h2>
+    <span class="muted small">Matched on company name in a headline, so read the terms column.</span>
+  </div>
+  <table class="table table--compact">
+    <thead><tr><th>Symbol</th><th class="num">Mentions</th><th class="num">Positive</th><th class="num">Negative</th><th>Figures</th><th>Latest</th></tr></thead>
+    <tbody>
+      {% for symbol, entry in summary.items()|sort(attribute='1.count', reverse=true) %}
+      <tr>
+        <td><a href="/tickers/{{ symbol }}"><strong>{{ symbol }}</strong></a></td>
+        <td class="num">{{ entry.count }}</td>
+        <td class="num pos">{{ entry.bullish }}</td>
+        <td class="num neg">{{ entry.bearish }}</td>
+        <td class="muted">{{ entry.figures|join(', ') }}</td>
+        <td class="muted">{{ entry.latest|ago }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% for figure in figures %}
+<section class="card">
+  <h2>{{ figure.name }}</h2>
+  {% set stories = figure_news.get(figure.slug, []) %}
+  {% if stories %}
+  <ul class="news-list">
+    {% for story in stories %}
+    <li>
+      <a href="{{ story.url }}" target="_blank" rel="noopener">{{ story.title }}</a>
+      <span class="news-meta">
+        <span class="sentiment sentiment--{{ story.sentiment_label }}">{{ story.sentiment_label }}</span>
+        {{ story.source }} · {{ story.published_at|ago }}
+        {% if story.sentiment_terms.positive or story.sentiment_terms.negative %}
+        <span class="terms">
+          {% for term in story.sentiment_terms.positive %}<span class="term term--pos">{{ term }}</span>{% endfor %}
+          {% for term in story.sentiment_terms.negative %}<span class="term term--neg">{{ term }}</span>{% endfor %}
+        </span>
+        {% endif %}
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}<p class="muted">No stored coverage yet &mdash; run a refresh.</p>{% endif %}
+</section>
+{% endfor %}
+
+{% if mentions %}
+<section class="card">
+  <div class="section-head">
+    <h2>Every detected mention</h2>
+    <span class="muted small">Including the low-confidence ones, so the filter is auditable.</span>
+  </div>
+  <table class="table table--compact">
+    <thead><tr><th>Symbol</th><th>Figure</th><th>Stance</th><th class="num">Confidence</th><th>Matched on</th><th>Headline</th><th>When</th></tr></thead>
+    <tbody>
+      {% for mention in mentions %}
+      <tr>
+        <td><a href="/tickers/{{ mention.symbol }}">{{ mention.symbol }}</a></td>
+        <td class="muted">{{ mention.figure }}</td>
+        <td><span class="sentiment sentiment--{{ mention.stance }}">{{ mention.stance }}</span></td>
+        <td class="num">{{ '%.0f%%'|format(mention.confidence * 100) }}</td>
+        <td class="muted small">{{ mention.matched_terms|join(', ') }}</td>
+        <td class="small"><a href="{{ mention.url }}" target="_blank" rel="noopener">{{ mention.headline[:70] }}</a></td>
+        <td class="muted">{{ mention.published_at|ago }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}

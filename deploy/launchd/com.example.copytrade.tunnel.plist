@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  An optional Cloudflare tunnel that publishes the local dashboard on a
+  hostname you own. "cloudflared service install" is the documented route
+  and installs a SYSTEM daemon needing sudo; this is the per-user equivalent,
+  which is enough because the thing it fronts is also per-user and only runs
+  while this Mac is awake.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.example.copytrade.tunnel</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{cloudflared}</string>
+    <string>tunnel</string>
+    <string>run</string>
+    <string>trade-bot-live</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>15</integer>
+  <key>StandardOutPath</key><string>{root}/var/tunnel.log</string>
+  <key>StandardErrorPath</key><string>{root}/var/tunnel.log</string>
+  <key>ProcessType</key><string>Background</string>
+</dict>
+</plist>

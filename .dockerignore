@@ -1,0 +1,11 @@
+# Keep the build context to what the image actually needs. var/ is runtime
+# cache and local data that the container rebuilds or reads from its database.
+.git
+.venv
+.pytest_cache
+.ruff_cache
+__pycache__
+*.pyc
+dist
+artifacts
+var

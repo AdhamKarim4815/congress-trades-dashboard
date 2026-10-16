@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% set active = "digest" %}
+{% block title %}Digest · Copy Trade{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>What changed</h1>
+    <p class="lede">
+      {% if digest %}
+      {{ digest.new_disclosures }} tradeable disclosure{{ '' if digest.new_disclosures == 1 else 's' }}
+      became public between {{ digest.covers_from }} and {{ digest.covers_to }}.
+      Filtered to what the board would have ranked anyway &mdash; the rest is on the site.
+      {% else %}
+      The daily run writes this. It has not run yet.
+      {% endif %}
+    </p>
+  </div>
+</div>
+
+{% if not digest %}
+<section class="card empty">
+  <h2>No digest yet</h2>
+  <p class="muted">Run <code>trade-bot refresh</code>, or the <code>digest</code> stage on its own.</p>
+</section>
+{% else %}
+
+{% if digest.quiet %}
+<section class="card">
+  <p class="quiet-day">
+    Nothing from a top-{{ digest.top_rank }} member and no clustered activity in this window.
+    That is the normal state on most days, and it is reported rather than skipped &mdash;
+    a digest that goes silent when it is broken and silent when there is no news
+    is a digest nobody can trust.
+  </p>
+</section>
+{% endif %}
+
+{% if digest.headline %}
+<section class="card">
+  <div class="section-head">
+    <h2>From top-{{ digest.top_rank }} members</h2>
+    <span class="muted small">Rank is by shrunk excess return measured from the disclosure date.</span>
+  </div>
+  {% for row in digest.headline %}
+  <div class="digest-entry">
+    <div>
+      <span class="side-mark side-mark--{{ row.side }}">{{ row.side }}</span>
+    </div>
+    <div>
+      <a class="digest-sym" href="/tickers/{{ row.symbol }}">{{ row.symbol }}</a>
+      <span class="muted small">{{ row.asset_name }}</span>
+      <div class="digest-meta">
+        <a href="/members/{{ row.politician_id }}">{{ row.member }}</a>
+        <span class="buyer-rank buyer-rank--top">#{{ row.rank }}</span>
+        &middot; {{ row.size }}
+        &middot; traded {{ row.transaction_date }}, filed {{ row.disclosure_date }} (+{{ row.lag_days }}d)
+      </div>
+    </div>
+    <div>{% if row.source_url %}<a class="small" href="{{ row.source_url }}" target="_blank" rel="noopener">filing</a>{% endif %}</div>
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if digest.clusters %}
+<section class="card">
+  <div class="section-head">
+    <h2>Several members, same direction</h2>
+    <span class="muted small">The one signal that does not depend on anyone&rsquo;s track record.</span>
+  </div>
+  {% for row in digest.clusters %}
+  <div class="digest-entry">
+    <div><span class="side-mark side-mark--{{ row.side }}">{{ row.side }}</span></div>
+    <div>
+      <a class="digest-sym" href="/tickers/{{ row.symbol }}">{{ row.symbol }}</a>
+      <div class="digest-meta">{{ row.members|length }} members: {{ row.members|join(', ') }}</div>
+    </div>
+    <div></div>
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if digest.board %}
+<section class="card">
+  <h2>Top of the board now</h2>
+  <table class="table table--compact">
+    <thead><tr><th>Symbol</th><th>Side</th><th class="num">Conviction</th><th>Record behind it</th></tr></thead>
+    <tbody>
+      {% for row in digest.board %}
+      <tr>
+        <td><a href="/tickers/{{ row.symbol }}"><strong>{{ row.symbol }}</strong></a></td>
+        <td><span class="side-mark side-mark--{{ row.action }}">{{ row.action }}</span></td>
+        <td class="num">{{ (row.conviction * 100)|round(0, 'floor')|int }}/100</td>
+        <td><span class="chip tier tier--{{ row.tier }}">{{ row.tier }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<section class="card">
+  <p class="muted small">
+    Disclosure lags the trade by up to 45 days by law, so this is newly <strong>public</strong>
+    information, not fresh trading. Sizes are the brackets Congress discloses, never exact amounts.
+    The same digest is written to <code>var/reports/</code> and to the scheduled run&rsquo;s job summary.
+  </p>
+</section>
+{% endif %}
+{% endblock %}

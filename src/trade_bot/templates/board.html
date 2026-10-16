@@ -1,0 +1,380 @@
+{% extends "base.html" %}
+{% set active = "board" %}
+{% block title %}Opportunity board · Copy Trade{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>What&rsquo;s next to move</h1>
+    <p class="lede">
+      Both directions, ranked by who acted, how good their record is, and how many agree.
+      {% if generated_at %}<span class="muted">Built {{ generated_at|ago }}.</span>{% endif %}
+    </p>
+  </div>
+  <div class="stat-row">
+    <div class="stat"><span class="stat-value">{{ counts.actionable }}</span><span class="stat-label">tradeable disclosures</span></div>
+    <div class="stat"><span class="stat-value">{{ counts.members }}</span><span class="stat-label">members tracked</span></div>
+    <div class="stat"><span class="stat-value">{{ filings.parsed }}</span><span class="stat-label">filings parsed</span></div>
+    <div class="stat"><span class="stat-value">{{ coverage.symbols }}</span><span class="stat-label">price series</span></div>
+  </div>
+</div>
+
+{# The board is a set of claims; this strip is the standing link to whether
+   those claims have ever been tested. Kept above the list, not below it. #}
+{# Scope and certainty, not decoration. Half the cards below are sales and
+   the test only ever took buy positions; and a point estimate whose interval
+   straddles zero is not a result, so the strip says which of those it is. #}
+{% if backtest and backtest.summary and backtest.summary.positions %}
+{% set bs = backtest.summary %}
+{% set ctrl = backtest.control %}
+{% set solid = bs.conclusive and (not ctrl or not ctrl.trials or ctrl.beats_chance) %}
+<a class="scorecard {{ 'scorecard--pos' if solid else 'scorecard--untested' }}" href="/evidence">
+  <span class="scorecard-label">
+    {% if solid %}Tested on {{ bs.positions }} past <em>purchases</em>
+    {%- else %}Tested, and inconclusive{% endif %}
+  </span>
+  <span class="scorecard-body">
+    Buying what the top {{ bs.top_n }} bought returned
+    <strong>{{ bs.mean_excess_return|pct }}</strong> mean vs the index over
+    {{ bs.horizon_days }} days
+    {%- if bs.excess_ci_low is not none %}, somewhere between
+    <strong>{{ bs.excess_ci_low|pct }}</strong> and <strong>{{ bs.excess_ci_high|pct }}</strong>
+    at 95% confidence{% endif %}.
+    {% if ctrl and ctrl.trials and not ctrl.beats_chance %}
+    It beat only {{ ctrl.percentile|rate }} of runs that picked members at random, so the
+    ranking is not separating anyone.
+    {% elif ctrl and ctrl.trials %}
+    It beat {{ ctrl.percentile|rate }} of {{ ctrl.trials }} runs that picked members at
+    random.
+    {% endif %}
+    {% if not bs.conclusive %}The interval contains zero, so treat every ranking below as
+    a hypothesis.{% endif %}
+    The sell cards are <strong>not covered by this</strong> &mdash; a short is not
+    something a disclosure lets you copy, so that side has never been tested.
+  </span>
+  <span class="scorecard-more">See how this was measured &rarr;</span>
+</a>
+{% else %}
+<a class="scorecard scorecard--untested" href="/evidence">
+  <span class="scorecard-label">Untested</span>
+  <span class="scorecard-body">
+    This board has not been measured against the index yet, so treat every ranking
+    below as a hypothesis rather than a result.
+  </span>
+  <span class="scorecard-more">Why that matters &rarr;</span>
+</a>
+{% endif %}
+
+{% if not recommendations %}
+<section class="card empty">
+  <h2>Nothing on the board yet</h2>
+  {% if static_export %}
+  <p>
+    This snapshot was published before any disclosures had been scored. The next
+    scheduled run will fill it in.
+  </p>
+  {% else %}
+  <p>
+    Hit <strong>Refresh all</strong> above to pull the latest House filings, price them,
+    score every member and build the board. The first run downloads and parses filing
+    PDFs, so it takes a few minutes &mdash; the status bar shows exactly where it is.
+  </p>
+  <form method="post" action="/actions/refresh">
+    <button type="submit" class="btn btn--primary btn--lg">Run the first sync</button>
+  </form>
+  {% endif %}
+</section>
+{% else %}
+
+<div class="boardbar">
+  <label for="f-side">Side</label>
+  <select id="f-side" data-filter="side">
+    <option value="">buying and selling</option>
+    <option value="buy">buying only</option>
+    <option value="sell">selling only</option>
+  </select>
+  <label for="f-tier">Record</label>
+  <select id="f-tier" data-filter="tier">
+    <option value="">any</option>
+    <option value="trusted">top-{{ settings.recommendations.trusted_rank }} buyer</option>
+    <option value="credible">top-{{ settings.recommendations.credible_rank }} buyer</option>
+    <option value="unproven">no ranked buyer</option>
+  </select>
+  <label for="f-buyers">Members</label>
+  <select id="f-buyers" data-filter="buyers">
+    <option value="">any</option><option value="2">2 or more</option><option value="3">3 or more</option>
+  </select>
+  <label for="f-lag">Max lag</label>
+  <select id="f-lag" data-filter="lag">
+    <option value="">any</option><option value="30">30 days</option><option value="45">45 days</option>
+  </select>
+  <label for="f-sort">Sort</label>
+  <select id="f-sort" data-sort>
+    <option value="conviction">conviction</option>
+    <option value="lag">shortest lag</option>
+    <option value="buyers">most buyers</option>
+    <option value="recent">most recent filing</option>
+  </select>
+  <span class="count" id="board-count"></span>
+</div>
+
+{% if backtest and backtest.by_conviction and backtest.by_conviction.buckets
+      and not backtest.by_conviction.monotone %}
+<p class="boardnote">
+  <strong>The conviction number has been measured and does not order outcomes.</strong>
+  Sorted into quartiles across {{ backtest.wide.positions }} past positions, the lowest
+  scored the best. Read the cards for who bought and when &mdash; the buyer&rsquo;s record
+  is the part with evidence behind it &mdash; and treat the score itself as a sort order
+  rather than a forecast. <a href="/evidence">The measurement</a>.
+</p>
+{% endif %}
+
+<section class="board" id="board">
+  {% for item in recommendations %}
+  {% set side = item.get('action', 'buy') %}
+  {% set movers = item.get('sellers') if side == 'sell' else item.get('buyers') %}
+  {% set lags = movers | map(attribute='lag_days') | list %}
+  <article class="opportunity opportunity--{{ side }}"
+           data-side="{{ side }}"
+           data-tier="{{ item.get('tier', 'unranked') }}"
+           data-buyers="{{ movers|length }}"
+           data-lag="{{ lags|min if lags else 999 }}"
+           data-conviction="{{ (item.conviction * 1000)|round(0, 'floor')|int }}"
+           data-filed="{{ item.latest_disclosure_date or '' }}">
+    <div class="opportunity-head">
+      <div class="opportunity-symbol">
+        <span class="side-mark side-mark--{{ side }}"
+              title="{{ 'Members have been selling this; the card ranks the sale, not a purchase.' if side == 'sell' else 'Members have been buying this.' }}">{{ side }}</span>
+        <a href="/tickers/{{ item.symbol }}">{{ item.symbol }}</a>
+        {% if item.company_name %}<span class="opportunity-company">{{ item.company_name }}</span>{% endif %}
+      </div>
+      {# The bar is drawn faint when the measurement says the score does not
+         order outcomes. A confident-looking gauge for a number shown not to
+         predict anything is the most misleading thing this page could do. #}
+      {% set conviction_tested = backtest and backtest.by_conviction
+                                 and backtest.by_conviction.monotone %}
+      <div class="conviction {{ '' if conviction_tested else 'conviction--unproven' }}"
+           title="{% if conviction_tested %}Blended conviction: records, agreement, size, recency and coverage. Measured to order outcomes — see /evidence.{% else %}Blended conviction. Measured against outcomes, this score does not order them — the buyer's record is the part with evidence behind it. See /evidence.{% endif %} Scale is 0 to 100.">
+        <div class="conviction-bar"><div class="conviction-fill" style="width: {{ (item.conviction * 100)|round(0, 'floor') }}%"></div></div>
+        <span class="conviction-value">{{ (item.conviction * 100)|round(0, 'floor')|int }}</span>
+        <span class="conviction-scale">/100</span>
+      </div>
+    </div>
+
+    <div class="chips">
+      <span class="chip tier tier--{{ item.get('tier', 'unranked') }}"
+            title="How the members on this side rank on their record at trading this direction — buying is ranked on buying, selling on selling. Walk-forward testing separates the top band from the rest; it does not order the rest. See /evidence.">
+        {% set who = 'seller' if side == 'sell' else 'buyer' %}
+        {% if item.get('tier') == 'trusted' %}top-{{ settings.recommendations.trusted_rank }} {{ who }}
+        {%- elif item.get('tier') == 'credible' %}top-{{ settings.recommendations.credible_rank }} {{ who }}
+        {%- elif item.get('tier') == 'unproven' %}no top-{{ settings.recommendations.credible_rank }} {{ who }}
+        {%- else %}no scored record{% endif %}
+      </span>
+      {% if side == 'sell' %}
+      <span class="chip chip--sell">{{ item.seller_count }} seller{{ '' if item.seller_count == 1 else 's' }}</span>
+      {% if item.buyer_count %}<span class="chip chip--buy">{{ item.buyer_count }} buying against it</span>{% endif %}
+      {% else %}
+      <span class="chip chip--buy">{{ item.buyer_count }} buyer{{ '' if item.buyer_count == 1 else 's' }}</span>
+      {% if item.seller_count %}<span class="chip chip--sell">{{ item.seller_count }} selling against it</span>{% endif %}
+      {% endif %}
+      {% if item.get('committee_conflicts') %}
+      <span class="chip chip--politics"
+            title="{{ 'Weighted on this card: sales inside a member remit beat comparable sales by a wide margin.' if side == 'sell' else 'Shown but not scored: purchases inside a member remit measured worse than purchases outside it.' }}">
+        {{ item.committee_conflicts }} on the overseeing committee</span>
+      {% endif %}
+      <span class="chip" title="Sum of bracket midpoints — Congress discloses ranges, so this is an estimate">~{{ item.total_disclosed_dollars|money }}</span>
+      {% if item.political_mentions %}<span class="chip chip--politics">{{ item.political_mentions }} political mention{{ '' if item.political_mentions == 1 else 's' }}</span>{% endif %}
+      {% if item.latest_disclosure_date %}<span class="chip chip--muted">disclosed {{ item.latest_disclosure_date }}</span>{% endif %}
+    </div>
+
+    {% if movers %}
+    <table class="buyers">
+      <thead>
+        <tr>
+          <th>{{ 'Seller' if side == 'sell' else 'Buyer' }}</th>
+          <th>Size as filed</th>
+          <th>Traded &rarr; filed</th>
+          <th class="num" title="What the decision has been worth since it became public, signed by intent: a sale followed by a rise counts against the seller.">{{ 'Sale, judged' if side == 'sell' else 'Buy, judged' }}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for buyer in movers %}
+        <tr>
+          <td data-label="Member">
+            <a href="/members/{{ buyer.politician_id }}">{{ buyer.name }}</a>
+            {% if buyer.get('rank') %}
+            <span class="buyer-rank {{ 'buyer-rank--top' if buyer.rank <= 3 else '' }}"
+                  title="Rank among all scored members. Walk-forward testing found the edge is concentrated in the top 3.">#{{ buyer.rank }}</span>
+            {% endif %}
+            {% if buyer.rankable and buyer.score is not none %}
+            <span class="buyer-score {{ 'pos' if buyer.score > 0 else 'neg' }}"
+                  title="Shrunk excess return over the scoring horizon, signed by intent">{{ buyer.score|pct }}</span>
+            {% endif %}
+            {% for committee in buyer.get('committees', []) %}
+            <span class="remit" title="This member sits on a committee whose remit covers {{ item.symbol }}{{ ' — which is weighted on a sell card' if side == 'sell' else ', which is shown but not scored on a buy card' }}">{{ committee }}</span>
+            {% endfor %}
+          </td>
+          {# The bracket, drawn as the lettered boxes on the form. A midpoint
+             would invent precision the filing never had. #}
+          <td data-label="Size as filed">
+            <span class="band" title="Bracket {{ buyer.amount_low|band_letter }} as checked on the filing">
+              {{ buyer.amount_low|band_letter }}</span>
+            <span class="band-range">{{ buyer.amount_low|bracket(buyer.amount_high) }}</span>
+            {%- if buyer.trade_count > 1 %}
+            <span class="lag-dates">over {{ buyer.trade_count }} trades</span>{% endif %}
+          </td>
+
+          {# The lag, measured rather than abbreviated. #}
+          <td data-label="Traded then filed">
+            <span class="lag {{ 'lag--suspect' if buyer.lag_days > MAX_LAG_DAYS }}"
+                  title="{% if buyer.lag_days > MAX_LAG_DAYS %}Beyond any honest lateness — the transaction date is a misread, so the member's own return is not priced from it{% else %}{{ buyer.lag_days }} days passed before this trade was public{% endif %}">
+              <em style="width: {{ [buyer.lag_days, 90]|min }}px"></em>+{{ buyer.lag_days }}d
+              {%- if buyer.lag_days > MAX_LAG_DAYS %} &#9873;{% endif %}
+            </span>
+            <span class="lag-dates">{{ buyer.transaction_date|shortdate }} &rarr; {{ buyer.disclosure_date|shortdate }}</span>
+          </td>
+
+          {# Two returns that are not peers. The member's own gain is context;
+             only the since-filed figure was ever available to act on. #}
+          <td class="num" data-label="Since filed">
+            {# Signed by intent, like the score. On a sell card a rising price
+               is what the seller gave up, so it counts against them — showing
+               the raw move here painted a bad exit green. The price move
+               itself is still one hover away, because "the stock rose" and
+               "the sale was a mistake" are both true and both worth saying. #}
+            <span class="ret-yours {{ 'pos' if (buyer.result_since_disclosure or 0) > 0 else 'neg' }}"
+                  title="{{ 'The sale, judged: ' if side == 'sell' else 'The purchase, judged: ' }}{{ item.symbol }} moved {{ buyer.move_since_disclosure|pct }} since the filing{{ ', which a seller gives up' if side == 'sell' and (buyer.move_since_disclosure or 0) > 0 else (', which the exit avoided' if side == 'sell' else '') }}">{{ buyer.result_since_disclosure|pct }}</span>
+            <span class="ret-theirs" title="The same, measured from the day they traded rather than the day it became public. Real for them, never available to you.">{{ buyer.result_since_trade|pct }} theirs</span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    <ul class="reasons">
+      {% for reason in item.reasons %}<li>{{ reason }}</li>{% endfor %}
+    </ul>
+
+    {% if movers %}
+    <details class="prov">
+      <summary>Where these figures come from</summary>
+      <dl class="prov-body">
+        <dt>Filings</dt>
+        <dd>{{ movers|length }} House/Senate periodic transaction report{{ '' if movers|length == 1 else 's' }}</dd>
+        <dt>Latest filed</dt><dd>{{ item.latest_disclosure_date or 'unknown' }}</dd>
+        <dt>Amounts</dt><dd>brackets as checked on the form, never a midpoint</dd>
+        <dt>Prices</dt><dd>close-of-day, back-adjusted for splits; returns measured from the filing date forward</dd>
+        {% if item.get('industry') %}<dt>Industry</dt><dd>{{ item.industry }}, per the SEC registry &mdash; what a committee remit is matched against</dd>{% endif %}
+        <dt>Conviction</dt>
+        <dd>records, agreement, size, recency and coverage{{ ', plus the committee overlap' if side == 'sell' }} &mdash;
+          <a href="/evidence">how it was tested</a></dd>
+      </dl>
+    </details>
+    {% endif %}
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
+
+<script>
+  // Filtering happens in the page, not in a query string: a GET form would be
+  // inert in the published snapshot, and the board should behave the same
+  // whether it is being served live or read from disk.
+  (function () {
+    var board = document.getElementById("board");
+    if (!board) return;
+    var rows = Array.prototype.slice.call(board.querySelectorAll(".opportunity"));
+    var controls = Array.prototype.slice.call(document.querySelectorAll("[data-filter],[data-sort]"));
+    var count = document.getElementById("board-count");
+
+    function apply() {
+      var want = {};
+      controls.forEach(function (c) { if (c.dataset.filter) want[c.dataset.filter] = c.value; });
+      var shown = 0;
+      rows.forEach(function (row) {
+        var ok =
+          (!want.side || row.dataset.side === want.side) &&
+          (!want.tier || row.dataset.tier === want.tier) &&
+          (!want.buyers || +row.dataset.buyers >= +want.buyers) &&
+          (!want.lag || +row.dataset.lag <= +want.lag);
+        row.hidden = !ok;
+        if (ok) shown++;
+      });
+      count.textContent = shown + " of " + rows.length + " shown";
+
+      var sort = document.querySelector("[data-sort]").value;
+      var keyed = rows.slice().sort(function (a, b) {
+        if (sort === "lag") return +a.dataset.lag - +b.dataset.lag;
+        if (sort === "buyers") return +b.dataset.buyers - +a.dataset.buyers;
+        if (sort === "recent") return (b.dataset.filed || "").localeCompare(a.dataset.filed || "");
+        return +b.dataset.conviction - +a.dataset.conviction;
+      });
+      keyed.forEach(function (row) { board.appendChild(row); });
+    }
+    controls.forEach(function (c) { c.addEventListener("change", apply); });
+    apply();
+  })();
+</script>
+
+<div class="two-col">
+  <section class="card">
+    <h2>World headlines</h2>
+    {% if world_news %}
+    <ul class="news-list">
+      {% for story in world_news %}
+      <li>
+        <a href="{{ story.url }}" target="_blank" rel="noopener">{{ story.title }}</a>
+        <span class="news-meta">
+          <span class="sentiment sentiment--{{ story.sentiment_label }}">{{ story.sentiment_label }}</span>
+          {{ story.source }} · {{ story.published_at|ago }}
+        </span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted">No world headlines yet &mdash; run a refresh.</p>{% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Business &amp; markets</h2>
+    {% if business_news %}
+    <ul class="news-list">
+      {% for story in business_news %}
+      <li>
+        <a href="{{ story.url }}" target="_blank" rel="noopener">{{ story.title }}</a>
+        <span class="news-meta">
+          <span class="sentiment sentiment--{{ story.sentiment_label }}">{{ story.sentiment_label }}</span>
+          {{ story.source }} · {{ story.published_at|ago }}
+        </span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted">No business headlines yet.</p>{% endif %}
+  </section>
+</div>
+
+{% if sync_sources %}
+<section class="card">
+  <h2>Source health</h2>
+  <p class="muted small">
+    Coverage is cumulative: <strong>{{ filings.parsed }} of {{ filings.total }}</strong> filings parsed
+    ({{ filings.failed }} unreadable &mdash; scanned paper filings with no text layer).
+    The per-source figures below are what the <em>last run</em> added; filings already
+    parsed are skipped rather than re-fetched.
+  </p>
+  <table class="table table--compact">
+    <thead><tr><th>Source</th><th>Status</th><th>Last run</th><th>Trades added</th><th>Detail</th></tr></thead>
+    <tbody>
+      {% for name, report in sync_sources.items() %}
+      <tr>
+        <td><code>{{ name }}</code></td>
+        <td>{% if report.ok %}<span class="pill pill--ok">ok</span>{% else %}<span class="pill pill--bad">failed</span>{% endif %}</td>
+        <td><span class="muted">+{{ report.filings_parsed }} new</span>{% if report.filings_failed %} <span class="muted">({{ report.filings_failed }} unreadable)</span>{% endif %}</td>
+        <td>{{ report.trades_added }}</td>
+        <td class="muted small">{{ report.error or (report.details.note if report.details else '') or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}

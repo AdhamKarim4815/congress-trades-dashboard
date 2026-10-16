@@ -1,0 +1,786 @@
+{% extends "base.html" %}
+{% set active = "evidence" %}
+{% block title %}Does this work? · Copy Trade{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Does following them actually work?</h1>
+    <p class="lede">
+      Every other page here assumes copying members of Congress is worth doing.
+      This page is the test of that assumption &mdash; run walk-forward, priced at
+      the disclosure date, with no lookahead. It is the number that should decide
+      whether you trust the board&rsquo;s <strong>buy</strong> side. It takes purchases
+      only, and what that leaves untested is set out below.
+    </p>
+  </div>
+</div>
+
+{% if not backtest %}
+<section class="card empty">
+  <h2>Not measured yet</h2>
+  <p>
+    The strategy test has not been run against the current data. Until it has,
+    the board is an untested hypothesis and should be read as one.
+  </p>
+  {% if not static_export %}
+  <form method="post" action="/actions/refresh">
+    <button type="submit" class="btn btn--primary btn--lg">Run the test</button>
+  </form>
+  {% endif %}
+</section>
+{% else %}
+
+{% set s = backtest.summary %}
+{% if s.positions %}
+<section class="card">
+  <h2>Buying what the top {{ s.top_n }} bought, {{ s.horizon_days }}-day holds</h2>
+  <div class="stat-row stat-row--wide">
+    <div class="stat">
+      <span class="stat-value {{ 'pos' if s.median_excess_return > 0 else 'neg' }}">
+        {{ s.median_excess_return|pct }}
+      </span>
+      <span class="stat-label">median return vs {{ benchmark }}</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value {{ 'pos' if s.mean_excess_return > 0 else 'neg' }}">
+        {{ s.mean_excess_return|pct }}
+      </span>
+      <span class="stat-label">mean return vs {{ benchmark }}</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">{{ s.beat_benchmark_rate|rate }}</span>
+      <span class="stat-label">of positions beat the index</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">{{ s.positions }}</span>
+      <span class="stat-label">positions taken</span>
+    </div>
+  </div>
+  {# The interval, not just the point. A mean of +3.4% over 188 positions with
+     a standard deviation seven times its size is not the same claim as +3.4%,
+     and printing only the second invites a reader to hear the first. #}
+  {% if s.excess_ci_low is not none %}
+  <p class="interval {{ 'interval--clear' if s.conclusive else 'interval--murky' }}">
+    <span class="interval-label">95% confidence</span>
+    The mean is <strong>{{ s.mean_excess_return|pct }}</strong>, and the true figure is
+    somewhere between <strong>{{ s.excess_ci_low|pct }}</strong> and
+    <strong>{{ s.excess_ci_high|pct }}</strong>.
+    {% if s.conclusive %}
+    That interval clears zero, so there is an edge here &mdash; but note how close the
+    lower bound runs to nothing, and read the control below before sizing anything on it.
+    {% else %}
+    <strong>That interval contains zero</strong>, which means this measurement cannot
+    distinguish the strategy from no edge at all. Treat the headline as undecided.
+    {% endif %}
+  </p>
+  {% endif %}
+  {% if s.beat_rate_probability is not none %}
+  <p class="muted">
+    The beat rate is the figure most easily over-read. {{ s.beat_benchmark_wins }} wins in
+    {{ s.positions }} is what a fair coin produces
+    <strong>{{ s.beat_rate_probability|rate(1) }}</strong> of the time, so
+    {% if s.beat_rate_probability < 0.05 %}it is unlikely to be chance.
+    {% else %}<strong>it is not on its own evidence of anything</strong>. The edge such as
+    it is lives in the size of the wins, not in how often they come.{% endif %}
+  </p>
+  {% endif %}
+  <p class="muted">
+    {{ s.start }} to {{ s.end }} &middot; {{ s.rebalances }} rebalances &middot;
+    {{ s.unique_symbols }} tickers across {{ s.unique_members }} members.
+    The strategy itself returned {{ s.median_return|pct }} median; the index
+    returned {{ s.mean_benchmark_return|pct }} mean over the same windows.
+  </p>
+</section>
+
+{% if backtest.wide and backtest.wide.positions %}
+{% set w = backtest.wide %}
+<section class="card">
+  <h2>The same test, cast wider</h2>
+  <p class="lede">
+    Following the top {{ w.top_n }} instead of the top {{ s.top_n }} returns
+    <strong class="{{ 'pos' if w.mean_excess_return > 0 else 'neg' }}">{{ w.mean_excess_return|pct }}</strong>
+    mean against the index, beating it {{ w.beat_benchmark_rate|rate }} of the time
+    across {{ w.positions }} positions
+    {%- if w.excess_ci_low is not none %} &mdash; interval {{ w.excess_ci_low|pct }} to
+    {{ w.excess_ci_high|pct }}{% if not w.conclusive %}, which contains zero{% endif %}
+    {%- endif %}.
+  </p>
+  {# Derived, like the band verdicts. "It reverses the edge" was true of one
+     measurement and is not true of this one, and a sentence that cannot
+     notice that is a sentence that will eventually lie. #}
+  <p class="muted">
+    This is the more important of the two numbers, and the less flattering one.
+    {% if w.mean_excess_return < -0.005 %}
+    Widening the net does not dilute the edge &mdash; it reverses it.
+    {% elif w.mean_excess_return < s.mean_excess_return %}
+    Widening the net dilutes the edge, from {{ s.mean_excess_return|pct }} down to
+    {{ w.mean_excess_return|pct }}.
+    {% else %}
+    Widening the net does not cost anything here, which is itself worth noticing: it
+    means the top few are not carrying this on their own.
+    {% endif %}
+    {% if w.mean_excess_return < s.mean_excess_return %}
+    Whatever is being measured lives in a handful of members, not in Congress generally,
+    and any version of this strategy that follows &ldquo;politicians&rdquo; as a group
+    should be expected to do worse than the headline.
+    {% endif %}
+  </p>
+</section>
+{% endif %}
+
+{% if backtest.control and backtest.control.trials %}
+{% set c = backtest.control %}
+<section class="card">
+  <h2>Is the ranking doing anything, or is it picking three from eighty?</h2>
+  <p class="lede">
+    Walk-forward testing stops this measurement seeing the future. It does not stop it
+    getting lucky: three members are chosen from around eighty, twenty-two times over, and
+    some of them will look good by chance alone. The only way to know how much is to run
+    the identical walk while <strong>ignoring the ranking</strong> &mdash; same eligibility
+    bar, same periods, same pricing, members picked at random &mdash; and see where the
+    real result lands.
+  </p>
+  <div class="stat-row stat-row--wide">
+    <div class="stat">
+      <span class="stat-value {{ 'pos' if c.actual > 0 else 'neg' }}">{{ c.actual|pct }}</span>
+      <span class="stat-label">the ranking</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value {{ 'pos' if c.median > 0 else 'neg' }}">{{ c.median|pct }}</span>
+      <span class="stat-label">median of {{ c.trials }} random picks</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">{{ c.best|pct }}</span>
+      <span class="stat-label">luckiest random run</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">{{ c.percentile|rate }}</span>
+      <span class="stat-label">of random runs it beat</span>
+    </div>
+  </div>
+  <p class="{{ 'interval interval--clear' if c.beats_chance else 'interval interval--murky' }}">
+    {% if c.beats_chance %}
+    <span class="interval-label">the ranking earns its place</span>
+    Choosing by rank beat {{ c.percentile|rate }} of the random draws, and the best of
+    {{ c.trials }} lucky runs still only reached {{ c.best|pct }} against the ranking&rsquo;s
+    {{ c.actual|pct }}. Whatever the score is measuring, it is not the shape of the pool.
+    {% else %}
+    <span class="interval-label">indistinguishable from luck</span>
+    Choosing by rank beat only {{ c.percentile|rate }} of the random draws. On this
+    evidence the ranking is not separating members &mdash; the headline above is what
+    picking three names out of the eligible pool earns on its own.
+    {% endif %}
+  </p>
+  <p class="muted small">
+    {{ c.trials }} trials, each with its own fixed seed so the figure is reproducible.
+    The control removes only the ranking; it keeps the minimum-trades bar, so it is not
+    competing against members with no record at all.
+  </p>
+</section>
+{% endif %}
+
+{% if backtest.by_conviction and backtest.by_conviction.buckets %}
+{% set bc = backtest.by_conviction %}
+<section class="card">
+  <h2>Does the number on every card predict anything?</h2>
+  <p class="lede">
+    Conviction is the most prominent figure in this application &mdash; a score out of a
+    hundred with a bar beside it on every card &mdash; and until now only one of its six
+    components had ever been tested. This rebuilds the score each position would have
+    carried on the day it was taken, sorts the positions by it, and asks whether the
+    quartiles come out in order.
+  </p>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Conviction quartile</th>
+        <th class="num">Positions</th>
+        <th class="num">Mean vs index</th>
+        <th class="num">95% interval</th>
+        <th class="num">Beat rate</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in bc.buckets %}
+      <tr>
+        <td><strong>Q{{ row.quartile }}</strong>
+          <span class="lots">score {{ (row.conviction_low * 100)|round|int }}&ndash;{{ (row.conviction_high * 100)|round|int }}</span></td>
+        <td class="num">{{ row.positions }}</td>
+        <td class="num {{ 'pos' if row.mean_excess > 0 else 'neg' }}">{{ row.mean_excess|pct }}</td>
+        <td class="num small muted">
+          {% if row.ci_low is not none %}{{ row.ci_low|pct }} to {{ row.ci_high|pct }}{% else %}&mdash;{% endif %}
+        </td>
+        <td class="num">{{ row.beat_rate|rate }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="interval {{ 'interval--clear' if bc.monotone and bc.top_beats_bottom else 'interval--murky' }}">
+    {% if bc.monotone %}
+    <span class="interval-label">the score orders outcomes</span>
+    The quartiles come out in order, so the blend is doing what the bar on each card
+    implies it does.
+    {% elif bc.top_beats_bottom %}
+    <span class="interval-label">partly</span>
+    The top quartile beats the bottom by {{ bc.spread|pct }}, but the middle does not fall
+    in order. The score separates the extremes and not much else.
+    {% else %}
+    <span class="interval-label">no &mdash; and it points the wrong way</span>
+    The <strong>lowest</strong>-conviction quartile returned the most, and the highest
+    returned {{ bc.spread|pct }} less than it. On this evidence the blended score does not
+    predict outcome, and the bar drawn beside it on every card is claiming more than the
+    measurement supports. The one component with evidence behind it is the buyer&rsquo;s
+    record, which is tested separately above.
+    {% endif %}
+  </p>
+  {% if backtest.by_cluster %}
+  <h3 style="margin-top:18px">And the second-largest component on its own</h3>
+  <p class="muted small">
+    Clustering carries 22% of the score, on the argument that independent buyers rarely
+    coincide by chance. That is an argument rather than a measurement, so here is the
+    measurement.
+  </p>
+  <table class="table table--compact">
+    <thead><tr><th>Members buying the same name</th><th class="num">Positions</th><th class="num">Mean vs index</th><th class="num">Beat rate</th></tr></thead>
+    <tbody>
+      {% for row in backtest.by_cluster %}
+      <tr>
+        <td>{{ row.buyers }}</td>
+        <td class="num">{{ row.positions }}</td>
+        <td class="num {{ 'pos' if row.mean_excess > 0 else 'neg' }}">{{ row.mean_excess|pct }}</td>
+        <td class="num">{{ row.beat_rate|rate }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if backtest.by_opposition %}
+  <h3 style="margin-top:18px">What opposition turned out to be worth</h3>
+  <p class="muted small">
+    Conviction used to fall by up to 45% when other members were selling the same name, on
+    the reasoning that opposition is real counter-evidence. It was the single reason the
+    blend inverted: it pushed top-ranked buyers with sellers against them into the bottom
+    quartile, and the bottom quartile was the one performing.
+  </p>
+  <table class="table table--compact">
+    <thead><tr><th>Others selling the same name</th><th class="num">Positions</th><th class="num">Mean vs index</th><th class="num">Beat rate</th></tr></thead>
+    <tbody>
+      {% for row in backtest.by_opposition %}
+      <tr>
+        <td>{{ row.opposition }}</td>
+        <td class="num">{{ row.positions }}</td>
+        <td class="num {{ 'pos' if row.mean_excess > 0 else 'neg' }}">{{ row.mean_excess|pct }}</td>
+        <td class="num">{{ row.beat_rate|rate }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">
+    The penalty is <strong>removed, not reversed</strong>. Turning it into a bonus because
+    this window says so would be fitting three years of one market, and a more confident
+    mistake than the one being corrected. The counts stay on every card, so a reader can
+    see who went the other way and decide for themselves.
+  </p>
+  {% endif %}
+  <p class="muted small">
+    Rebuilt from what was knowable on the entry date, which is not all of it:
+    {{ bc.excluded|join(', ') }} cannot be reconstructed for a past day, because the
+    headlines and the committee rosters are fetched in the present. And
+    {{ bc.constant|join(', ') }} is a constant here &mdash; a position is taken on the
+    disclosure date, so it is always at full value. That is worth knowing on its own: it
+    is 13% of the score a reader sees, and it can only ever separate cards by how stale
+    they have become.
+  </p>
+</section>
+{% endif %}
+
+{% if backtest.exits and backtest.exits.positions and backtest.exits.positions >= 8 %}
+{% set ex = backtest.exits %}
+<section class="card">
+  <h2>Is following their exits worth anything?</h2>
+  <p class="lede">
+    A disclosure cannot be copied into a short, which is why the sell side has no
+    standalone test. But it can be copied into an <strong>exit</strong>: if you hold
+    something because a member bought it, their sale is an instruction you can act on.
+    So these are the same {{ ex.of_total }} positions as above, with one decision changed
+    &mdash; {{ ex.positions }} of them saw the member file a sale before the horizon
+    closed.
+  </p>
+  <div class="stat-row stat-row--wide">
+    <div class="stat">
+      <span class="stat-value {{ 'pos' if ex.held_mean_excess > 0 else 'neg' }}">{{ ex.held_mean_excess|pct }}</span>
+      <span class="stat-label">held to the horizon</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value {{ 'pos' if ex.exited_mean_excess > 0 else 'neg' }}">{{ ex.exited_mean_excess|pct }}</span>
+      <span class="stat-label">sold when they sold</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value {{ 'pos' if ex.difference > 0 else 'neg' }}">{{ ex.difference|pct }}</span>
+      <span class="stat-label">what the exit was worth</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">{{ ex.helped_rate|rate }}</span>
+      <span class="stat-label">of exits helped</span>
+    </div>
+  </div>
+  <p class="interval {{ 'interval--clear' if ex.conclusive and ex.difference > 0 else 'interval--murky' }}">
+    {% if ex.conclusive and ex.difference < 0 %}
+    <span class="interval-label">following their exits costs money</span>
+    Selling when they sold gave up <strong>{{ ex.difference|pct }}</strong> of excess
+    return, with a 95% interval of {{ ex.ci_low|pct }} to {{ ex.ci_high|pct }} &mdash; it
+    does not contain zero, so this is not noise. It helped in only
+    {{ ex.helped_rate|rate }} of cases. Whatever a member&rsquo;s sale says about a
+    company, acting on it in a position you already hold made things worse over this
+    window.
+    {% elif ex.conclusive %}
+    <span class="interval-label">following their exits pays</span>
+    Selling when they sold added <strong>{{ ex.difference|pct }}</strong> of excess
+    return, interval {{ ex.ci_low|pct }} to {{ ex.ci_high|pct }}.
+    {% else %}
+    <span class="interval-label">inconclusive</span>
+    The difference is {{ ex.difference|pct }} with an interval of {{ ex.ci_low|pct }} to
+    {{ ex.ci_high|pct }}, which contains zero. This cannot say whether honouring their
+    exits helps or hurts.
+    {% endif %}
+  </p>
+  {% if ex.conflicted_difference is defined %}
+  <p class="remit-note">
+    <strong>And whether the committee weighting survives it.</strong> The board adds
+    conviction to a sell card when the seller sits on a committee overseeing the company,
+    because sales inside a member&rsquo;s remit measured markedly better than sales
+    outside it. That sits awkwardly beside a result saying exits cost money, so the exits
+    are split: inside a remit they cost {{ ex.conflicted_difference|pct }}, outside it
+    {{ ex.unconflicted_difference|pct }}.
+    {% if ex.conflict_helps %}
+    The remit ones are the less damaging of the two, which is consistent with the
+    weighting &mdash; but only {{ ex.conflicted_exits }} exits carry it, and
+    <em>less negative</em> is not a reason to act.
+    {% else %}
+    The remit ones are the worse of the two, which the sell weighting does not survive
+    and should be revisited.
+    {% endif %}
+  </p>
+  {% endif %}
+  <p class="muted small">
+    The proceeds go into the benchmark on exit, so both legs are measured as excess over
+    the same full window and the exited one simply stops accruing at the sale. Comparing a
+    forty-day excess against a ninety-day one would hand the result to whichever leg was
+    invested longer, which is a fact about the clock rather than about the decision.
+  </p>
+</section>
+{% endif %}
+
+{% if backtest.by_horizon and backtest.by_horizon|length > 1 %}
+<section class="card">
+  <h2>The same test at every horizon</h2>
+  <p class="lede">
+    Four holding periods are computed and one of them headlines. Reporting only that one
+    is a choice a reader cannot see, so here are all four. If the result only appears at
+    the horizon that happens to be the default, it is a property of the choice rather
+    than of the members.
+  </p>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Hold for</th>
+        <th class="num">Positions</th>
+        <th class="num">Mean vs index</th>
+        <th class="num">95% interval</th>
+        <th class="num">Beat rate</th>
+        <th class="num">Coin-flip odds</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in backtest.by_horizon %}
+      <tr class="{{ 'is-top' if row.horizon_days == s.horizon_days }}">
+        <td><strong>{{ row.horizon_days }} days</strong>
+          {% if row.horizon_days == s.horizon_days %}<span class="lots">the headline</span>{% endif %}</td>
+        <td class="num">{{ row.positions }}</td>
+        <td class="num {{ 'pos' if row.mean_excess_return > 0 else 'neg' }}">{{ row.mean_excess_return|pct }}</td>
+        <td class="num small">
+          {% if row.excess_ci_low is not none %}
+          <span class="{{ 'muted' if row.conclusive else 'neg' }}">{{ row.excess_ci_low|pct }} to {{ row.excess_ci_high|pct }}</span>
+          {% if not row.conclusive %}<span class="lots">contains zero</span>{% endif %}
+          {% else %}<span class="muted">too few</span>{% endif %}
+        </td>
+        <td class="num">{{ row.beat_benchmark_rate|rate }}</td>
+        {# Coloured against the family threshold, not against 0.05. Marking
+           an uncorrected p as significant in a table whose whole purpose is
+           to show four tests at once would be the sharpest possible way to
+           mislead with it. #}
+        <td class="num small {{ 'pos' if row.significant else 'muted' }}">
+          {% if row.beat_rate_probability is not none %}{{ row.beat_rate_probability|rate(1) }}{% else %}&mdash;{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted">
+    The longest horizon is the weakest, which is what you would expect if the information
+    in a disclosure is spent within a few months. Anywhere the interval contains zero, the
+    measurement is not distinguishing the strategy from doing nothing.
+  </p>
+  {% if backtest.family_threshold %}
+  <p class="interval interval--murky">
+    <span class="interval-label">four tests, not one</span>
+    Testing {{ backtest.family_size }} horizons and reporting the best p-value is how a
+    coin flip becomes a finding: one set of {{ backtest.family_size }} fair coins in five
+    throws up a p under 5% somewhere. Significance above is marked against
+    <strong>{{ backtest.family_threshold|rate(1) }}</strong> &mdash; 5% split across the
+    {{ backtest.family_size }} of them &mdash; rather than against 5%.
+    {% set winners = backtest.by_horizon | selectattr('significant') | list %}
+    {% if winners %}
+    On that bar, {{ winners | map(attribute='horizon_days') | join(', ') }} days still
+    clears it.
+    {% else %}
+    On that bar, <strong>none of them clears it</strong>. The beat rates here are not
+    distinguishable from chance once the number of attempts is accounted for; the mean
+    excess and its interval are the figures that carry weight.
+    {% endif %}
+  </p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if backtest.sensitivity and backtest.sensitivity|length > 2 %}
+{% set sh = backtest.sensitivity_shape %}
+<section class="card">
+  <h2>The same test under settings it was not run with</h2>
+  <p class="lede">
+    Four numbers were chosen and never varied: how many resolved trades a member needs
+    before they can be ranked, how often the strategy rebalances, how far back the walk
+    starts, and how many members it follows. Each was a judgement. A result that only
+    survives the particular four is a property of the choice rather than of the members,
+    and the only way to know which is to move them.
+  </p>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Setting</th>
+        <th class="num">Positions</th>
+        <th class="num">Mean vs index</th>
+        <th class="num">95% interval</th>
+        <th class="num">Beat rate</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in backtest.sensitivity %}
+      <tr class="{{ 'is-top' if row.label == 'as published' }}">
+        <td>{{ row.label }}</td>
+        <td class="num">{{ row.positions }}</td>
+        <td class="num {{ 'pos' if row.mean_excess > 0 else 'neg' }}">{{ row.mean_excess|pct }}</td>
+        <td class="num small">
+          {% if row.ci_low is not none %}
+          <span class="{{ 'muted' if row.conclusive else 'neg' }}">{{ row.ci_low|pct }} to {{ row.ci_high|pct }}</span>
+          {% if not row.conclusive %}<span class="lots">contains zero</span>{% endif %}
+          {% else %}<span class="muted">&mdash;</span>{% endif %}
+        </td>
+        <td class="num">{{ row.beat_rate|rate }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if sh %}
+  <p class="interval {{ 'interval--clear' if sh.settings_still_positive == sh.variants else 'interval--murky' }}">
+    {% if sh.settings_that_did_better > 0 and sh.settings_still_positive == sh.variants %}
+    <span class="interval-label">a plateau, not a peak</span>
+    Every one of the {{ sh.variants }} settings comes out positive, from
+    {{ sh.worst|pct }} to {{ sh.best|pct }}, and
+    <strong>{{ sh.settings_that_did_better }}</strong> of them did better than the one
+    published. The headline was not tuned &mdash; had it been, it would sit at the top of
+    this table rather than {{ sh.published|pct }} against a median of {{ sh.median|pct }}.
+    {% elif sh.settings_that_did_better == 0 %}
+    <span class="interval-label">the published setting is the best one, which is a warning</span>
+    No other setting beats {{ sh.published|pct }}. A result that peaks exactly where the
+    parameters happen to sit is the signature of a tuned number, whether or not anyone
+    meant to tune it.
+    {% else %}
+    <span class="interval-label">mixed</span>
+    The settings range from {{ sh.worst|pct }} to {{ sh.best|pct }}, and
+    {{ sh.variants - sh.settings_still_positive }} of {{ sh.variants }} come out negative.
+    The result depends on choices a reader cannot see.
+    {% endif %}
+    Only {{ sh.conclusive_count }} of {{ sh.variants }} clear zero on their own interval.
+  </p>
+  <p class="muted small">
+    Two of them are worth reading directly rather than as a spread. Requiring more
+    resolved trades before a member can be ranked, and walking three years instead of
+    two, both weaken the result considerably &mdash; so the edge is strongest on the
+    smaller, more recent samples, which is the direction that should make anyone most
+    careful.
+  </p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if backtest.by_rank %}
+<section class="card">
+  <h2>Does the ranking carry information?</h2>
+  <p class="lede">
+    The headline number is only meaningful if a better rank actually predicts a
+    better result. If rank 1 does no better than rank 10, the score is noise.
+  </p>
+  {% if bands and bands.get('1-3') %}
+  <p class="{{ 'muted' if bands._shape.monotone else 'remit-note' }}">
+    {% if bands._shape.monotone %}
+    The bands fall in order, so the ranking carries information along its whole length.
+    {% elif bands._shape.best_is_top %}
+    <strong>Partly.</strong> The top band is the best of the three, but the bands below it
+    do not fall in order &mdash; ranks 7 and lower came out ahead of ranks 4 to 6. The
+    score separates the top from the rest; it does not rank the rest. Any reading of this
+    table as a slope is reading noise.
+    {% else %}
+    <strong>Not in this window.</strong> The top band is not the best one, so the score is
+    not currently ordering members by outcome at all.
+    {% endif %}
+  </p>
+  {% endif %}
+  <table class="table">
+    <thead>
+      <tr><th>Rank at entry</th><th class="num">Positions</th><th class="num">Mean vs index</th><th class="num">Beat rate</th></tr>
+    </thead>
+    <tbody>
+      {% for row in backtest.by_rank %}
+      <tr>
+        <td><strong>{{ row.rank }}</strong></td>
+        <td class="num">{{ row.positions }}</td>
+        <td class="num {{ 'pos' if row.mean_excess > 0 else 'neg' }}">{{ row.mean_excess|pct }}</td>
+        <td class="num">{{ row.beat_rate|rate }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted">
+    This is why conviction on the board keys off a rank rather than merely on a member
+    being rankable. Note what is being ranked: members are ordered by their record at
+    <em>buying</em>, and the strategy then buys what they buy. Ranking on the combined
+    buy-and-sell record and copying only the purchases put members in the top band who
+    had never bought anything.
+  </p>
+</section>
+{% endif %}
+
+{% if backtest.top_members %}
+<section class="card">
+  <h2>Who carried it</h2>
+  <table class="table">
+    <thead>
+      <tr><th>Member</th><th class="num">Positions</th><th class="num">Mean vs index</th><th class="num">Beat rate</th></tr>
+    </thead>
+    <tbody>
+      {% for row in backtest.top_members %}
+      <tr>
+        <td><a href="/members/{{ row.politician_id }}">{{ row.name }}</a></td>
+        <td class="num">{{ row.positions }}</td>
+        <td class="num {{ 'pos' if row.mean_excess > 0 else 'neg' }}">{{ row.mean_excess|pct }}</td>
+        <td class="num">{{ row.beat_rate|rate }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted">
+    Sorted by result, so this table is the one most likely to mislead: picking the
+    best performers after the fact always looks impressive. It is here to show
+    concentration, not to recommend anyone.
+  </p>
+</section>
+{% endif %}
+{% else %}
+<section class="card empty">
+  <h2>Not enough resolved history to measure</h2>
+  <p>{{ s.note or "No positions were taken over the test window." }}</p>
+</section>
+{% endif %}
+{% endif %}
+
+{% if committee_edge and committee_edge.buy and committee_edge.buy.conflicted.n %}
+{% set ce = committee_edge %}
+<section class="card">
+  <h2>Does sitting on the committee help?</h2>
+  <p class="lede">
+    The overlap between a member&rsquo;s committee and what they trade is the one
+    signal congressional data can produce that no general stock tool can. It was
+    added on the assumption that it would be the strongest thing here. Measured,
+    it is strong in one direction and <strong>backwards in the other</strong>.
+  </p>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Disclosures over {{ ce.horizon_days }} days</th>
+        <th class="num">Count</th>
+        <th class="num">Median vs index</th>
+        <th class="num">Beat rate</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for side, label in [('buy', 'Purchases'), ('sell', 'Sales')] %}
+      {% for bucket, qualifier in [('conflicted', 'inside the member&rsquo;s remit'), ('other', 'outside it')] %}
+      {% set row = ce[side][bucket] %}
+      {% if row.n %}
+      <tr>
+        <td>{{ label }} {{ qualifier|safe }}</td>
+        <td class="num">{{ row.n }}</td>
+        <td class="num {{ 'pos' if row.median_excess > 0 else 'neg' }}">{{ row.median_excess|pct }}</td>
+        <td class="num">{{ row.beat_rate|rate }}</td>
+      </tr>
+      {% endif %}
+      {% endfor %}
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted">
+    So the overlap earns weight on the <strong>sell</strong> side of the board and
+    none on the buy side. Weighting purchases for it would have made the board
+    measurably worse while feeling like the cleverest idea in the application.
+    Committee membership is still shown on every buy card &mdash; it is a reason to
+    read a disclosure carefully &mdash; it just does not move the number.
+  </p>
+  <p class="muted small">
+    Measured over the last {{ (ce.lookback_days / 365)|round(1) }} years, recomputed
+    every run. The jurisdiction map is editorial: committees with a broad or diffuse
+    remit are excluded rather than matched to everything, so this compares a narrow,
+    defensible overlap against everything else &mdash; not &ldquo;on a committee&rdquo;
+    against &ldquo;not&rdquo;.
+  </p>
+</section>
+{% endif %}
+
+{% if backtest and backtest.coverage and backtest.coverage.unpriced_trades %}
+{% set cov = backtest.coverage %}
+<section class="card">
+  <h2>What the measurement could not see</h2>
+  <p class="lede">
+    A disclosure whose company has no price series is dropped from every score and every
+    position, silently. That is survivorship, and the shape of it matters more than the
+    size: the companies that vanish are the ones that were acquired, delisted or renamed,
+    and they pile up in the oldest years of the window.
+  </p>
+  <div class="stat-row">
+    <div class="stat">
+      <span class="stat-value">{{ cov.unpriced_share|rate(1) }}</span>
+      <span class="stat-label">of tradeable disclosures dropped</span>
+    </div>
+    <div class="stat">
+      <span class="stat-value">{{ cov.unpriced_trades }}</span>
+      <span class="stat-label">trades, across {{ cov.unpriced_symbols }} symbols</span>
+    </div>
+    {% if s and s.skipped_unpriced is defined %}
+    <div class="stat">
+      <span class="stat-value">{{ s.skipped_unpriced }}</span>
+      <span class="stat-label">positions this test could not take</span>
+    </div>
+    {% endif %}
+  </div>
+  <table class="table table--compact">
+    <thead><tr><th>Disclosed in</th><th class="num">Priced</th><th class="num">Dropped</th><th class="num">Share dropped</th></tr></thead>
+    <tbody>
+      {% for row in cov.by_year %}
+      <tr>
+        <td>{{ row.year }}</td>
+        <td class="num">{{ row.priced }}</td>
+        <td class="num">{{ row.unpriced }}</td>
+        <td class="num {{ 'neg' if row.unpriced_share > 0.10 else 'muted' }}">{{ row.unpriced_share|rate }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted">
+    The decay is the tell. The further back a disclosure sits, the likelier its company
+    has since disappeared and taken its price history with it &mdash; so the oldest part
+    of the window is the most thinly measured, and it is measured only on the survivors.
+    The direction of the resulting bias is genuinely unclear: an acquisition usually pays
+    a premium and a delisting usually does not, and both are missing. What is clear is
+    that it is not zero, and nothing here corrects for it.
+  </p>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>What the prices behind these numbers do and do not include</h2>
+  <ul class="reasons">
+    <li>
+      <strong>Splits are handled.</strong> Every cached series is back-adjusted, so a
+      return spanning a 10-for-1 is measured correctly rather than as a 90% loss. That
+      is not taken on trust: the plausibility stage re-scans every series each run for
+      a close-to-close step sitting on a corporate-action ratio, and
+      {% if validation %}
+      the last run found
+      {%- set split_finding = (validation.findings | selectattr('code', 'equalto', 'unadjusted_split') | list) %}
+      {% if split_finding %}<strong class="neg">{{ split_finding[0].count }}</strong> to look at{% else %}<strong class="pos">none</strong>{% endif %}.
+      {% else %}it has not run yet.{% endif %}
+    </li>
+    <li>
+      <strong>Dividends are not.</strong> Providers return split-adjusted closes, not
+      total return, so every figure here understates income. It biases the result far
+      less than it sounds: excess return is a <em>difference</em> of two unadjusted
+      series, so what is missing is the gap between a holding&rsquo;s yield and the
+      index&rsquo;s, not the yield itself. Over a {{ s.horizon_days if s and s.positions else 90 }}-day
+      window with both sides yielding on the order of 1&ndash;2% a year, that gap is a
+      few tenths of a percent &mdash; material against a small edge, not against the
+      difference between the top and bottom of the ranking. A holding with an unusually
+      high yield is understated by more, and nothing here corrects for it.
+    </li>
+  </ul>
+</section>
+
+<section class="card">
+  <h2>How the test avoids flattering itself</h2>
+  <ul class="reasons">
+    <li>
+      <strong>Entries are at the disclosure price, never the member&rsquo;s.</strong>
+      Members disclose up to 45 days after they trade. The price they got is not a
+      price you could have paid, so the test uses the first close after the filing
+      became public.
+    </li>
+    <li>
+      <strong>Rankings use only outcomes known at the time.</strong>
+      At each rebalance, members are ranked using trades whose full
+      {{ s.horizon_days if s and s.positions else 90 }}-day window had already
+      closed by that date. A trade disclosed three weeks earlier has not finished
+      yet, so it cannot inform the ranking that selects it.
+    </li>
+    <li>
+      <strong>Every position is compared to the same window of the index.</strong>
+      A 12% gain in a month when the market rose 14% is a loss, and is counted as one.
+    </li>
+  </ul>
+</section>
+
+<section class="card">
+  <h2>What this does not prove</h2>
+  <ul class="reasons">
+    <li>
+      <strong>Nothing about the sell side.</strong> Every position here is a purchase.
+      A disclosure cannot be copied into a short, so there is no honest way to take a
+      member&rsquo;s sale as a position and measure it &mdash; which means the board&rsquo;s
+      sell cards, and the &ldquo;at selling&rdquo; ranking on the members page, rest on the
+      scoring alone. They are ranked by the same direction-signed excess return the buy
+      side uses, and that scoring has never been walk-forward tested in this direction.
+    </li>
+    <li>
+      <strong>The sample is small, and now says so in figures.</strong> Every result
+      above carries its 95% interval, and several of them contain zero. Where one does,
+      the measurement is not distinguishing the strategy from doing nothing &mdash; that
+      is stated on the row rather than left as a general caution here.
+    </li>
+    <li>
+      <strong>Whoever happens to be filing shapes the result.</strong> Members enter
+      and leave the ranking, and the ones with enough trades to rank are not a random
+      sample of Congress.
+    </li>
+    <li>
+      <strong>One window is one window.</strong> A strategy that worked across this
+      period is weak evidence about the next one, particularly since it spans a market
+      that mostly rose.
+    </li>
+    <li>
+      <strong>Disclosures are ranges, not amounts.</strong> Filings report brackets
+      like $1,001&ndash;$15,000, so position sizing here is unweighted by conviction.
+    </li>
+  </ul>
+  <p class="muted">
+    This is a measurement, not a promise, and nothing here is financial advice.
+  </p>
+</section>
+{% endblock %}

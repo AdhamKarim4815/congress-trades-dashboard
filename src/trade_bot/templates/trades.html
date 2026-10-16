@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% set active = "trades" %}
+{% block title %}Trades · Copy Trade{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Disclosure feed</h1>
+    <p class="lede">
+      Every transaction line parsed from a filing, newest <strong>disclosure</strong> first &mdash;
+      the order the public learned them in, not the order they happened.
+    </p>
+  </div>
+  <div class="stat-row">
+    <div class="stat"><span class="stat-value">{{ trades|length }}</span><span class="stat-label">rows shown</span></div>
+  </div>
+</div>
+
+<form class="filters card" method="get" action="/trades">
+  <label>Symbol <input type="text" name="symbol" value="{{ symbol }}" placeholder="AAPL" /></label>
+  <label>Chamber
+    <select name="chamber">
+      <option value="">any</option>
+      <option value="house" {{ 'selected' if chamber == 'house' }}>house</option>
+      <option value="senate" {{ 'selected' if chamber == 'senate' }}>senate</option>
+    </select>
+  </label>
+  <label>Type
+    <select name="kind">
+      <option value="">any</option>
+      {% for t in types %}<option value="{{ t }}" {{ 'selected' if kind == t }}>{{ t|replace('_',' ') }}</option>{% endfor %}
+    </select>
+  </label>
+  <label class="check"><input type="checkbox" name="actionable" value="1" {{ 'checked' if actionable }} /> tradeable only</label>
+  <button type="submit" class="btn">Filter</button>
+</form>
+
+{# Two-tier rows, matching the board and the ticker page: the holding and who
+   traded it on the first line, the mechanics of the filing beneath. A flat
+   eight-column table put the lag in a column of bare numbers, where a 400-day
+   one read exactly like a 4-day one. #}
+<table class="table">
+  <thead>
+    <tr>
+      <th>Holding</th>
+      <th>Member</th>
+      <th>Traded &rarr; filed</th>
+      <th class="num">Size as filed</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for trade in trades %}
+    {% set member = members.get(trade.politician_id, {}) %}
+    <tr>
+      <td>
+        {% if trade.symbol %}
+        <a href="/tickers/{{ trade.symbol }}"><strong>{{ trade.symbol }}</strong></a>
+        {% else %}<span class="muted">no ticker</span>{% endif %}
+        <span class="tag tag--{{ 'buy' if 'purchase' in trade.transaction_type else 'sell' }}">{{ trade.transaction_type|replace('_',' ') }}</span>
+        <span class="lots" title="{{ trade.asset_name }}">{{ trade.asset_name[:58] }}</span>
+      </td>
+      <td>
+        <a href="/members/{{ trade.politician_id }}">{{ member.get('full_name', trade.politician_id) }}</a>
+        {% if member.get('party') %}<span class="party party--{{ member.party|lower }}">{{ member.party[0] }}</span>{% endif %}
+        <span class="lots">{{ member.get('display_state', trade.chamber) }}</span>
+      </td>
+      <td>
+        <span class="lag {{ 'lag--suspect' if trade.reporting_lag_days > MAX_LAG_DAYS }}"
+              title="{% if trade.reporting_lag_days > MAX_LAG_DAYS %}Beyond any honest lateness — the transaction date is a misread and no member return is priced from it{% else %}{{ trade.reporting_lag_days }} days passed before this was public{% endif %}">
+          <em style="width: {{ [trade.reporting_lag_days, 90]|min }}px"></em>+{{ trade.reporting_lag_days }}d
+          {%- if trade.reporting_lag_days > MAX_LAG_DAYS %} &#9873;{% endif %}
+        </span>
+        <span class="lag-dates">{{ trade.transaction_date|shortdate }} &rarr; {{ trade.disclosure_date|shortdate }}</span>
+      </td>
+      <td class="num">
+        <span class="band" title="Bracket {{ trade.amount_low|band_letter }} as checked on the filing">
+          {{ trade.amount_low|band_letter }}</span>
+        <span class="band-range">{{ trade.amount_low|bracket(trade.amount_high) }}</span>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if not trades %}<p class="muted">No trades match. Run a refresh, or widen the filters.</p>{% endif %}
+
+<section class="card">
+  <p class="muted small">
+    Amounts are the brackets Congress discloses, never exact sizes &mdash; showing a
+    midpoint would invent precision the filing does not contain. The lag is what
+    separates the member&rsquo;s return from yours: nothing here was actionable until
+    the day on the right of the arrow.
+  </p>
+</section>
+{% endblock %}

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% set active = "news" %}
+{% block title %}News · Copy Trade<section class="card">
+  <p class="muted small">
+    Sentiment is lexicon-based, not a model: it counts words known to carry direction in
+    financial writing. That is transparent and cheap, and it misreads sarcasm and negation
+    like every such method. It is why coverage carries a small weight on the board and never
+    decides a ranking on its own.
+  </p>
+</section>
+{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>News</h1>
+    <p class="lede">
+      Everything ingested, scored by a finance sentiment lexicon at read time so the
+      tone is fixed when the headline arrives rather than recomputed later. Coverage is
+      the weakest input on the board and is weighted accordingly.
+    </p>
+  </div>
+</div>
+
+<div class="two-col">
+  {% for title, stories in [('World', world), ('Business & markets', business), ('Tickers', tickers), ('Members', members)] %}
+  <section class="card">
+    <div class="section-head">
+      <h2>{{ title }}</h2>
+      <span class="muted small">{{ stories|length }} stored</span>
+    </div>
+    {% if stories %}
+    <ul class="news-list">
+      {% for story in stories %}
+      <li>
+        <a href="{{ story.url }}" target="_blank" rel="noopener">{{ story.title }}</a>
+        <span class="news-meta">
+          <span class="sentiment sentiment--{{ story.sentiment_label }}">{{ story.sentiment_label }}</span>
+          {% if story.category in ('ticker', 'member') %}<span class="chip chip--muted">{{ story.subject }}</span>{% endif %}
+          {{ story.source }} · {{ story.published_at|ago }}
+        </span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted">Nothing stored yet.</p>{% endif %}
+  </section>
+  {% endfor %}
+</div>
+<section class="card">
+  <p class="muted small">
+    Sentiment is lexicon-based, not a model: it counts words known to carry direction in
+    financial writing. That is transparent and cheap, and it misreads sarcasm and negation
+    like every such method. It is why coverage carries a small weight on the board and never
+    decides a ranking on its own.
+  </p>
+</section>
+{% endblock %}

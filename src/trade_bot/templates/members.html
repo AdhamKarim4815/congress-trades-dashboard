@@ -1,0 +1,266 @@
+{% extends "base.html" %}
+{% set active = "members" %}
+{% block title %}Who to copy · Copy Trade{% endblock %}
+{% block content %}
+
+{# Bands come from the measurement, verdict included. Writing "a coin flip"
+   or "lost to the index" into the markup was a claim that could not notice it
+   had stopped being true — and it did stop, the moment the backtest was
+   corrected to rank on purchases. `_band_verdicts` derives the wording. #}
+
+<div class="page-head">
+  <div>
+    <h1>Who to copy</h1>
+    <p class="lede">
+      {{ rankable_count }} members have filed enough priceable
+      {{ 'purchases' if ranking_side == 'buy' else 'sales' if ranking_side == 'sell' else 'trades' }}
+      to rank {{ 'at buying' if ranking_side == 'buy' else 'at selling' if ranking_side == 'sell' else 'overall' }}.
+      They are not equally worth following, and the gap is not gradual &mdash;
+      <a href="/evidence">the measurement</a> puts almost all of the edge in the top three.
+      A member can be good at one direction and poor at the other, so the tabs rank each
+      separately rather than averaging them into a number that describes neither.
+    </p>
+  </div>
+  {# Three rankings, because "who is best" has three answers and they
+     disagree. Buying is the default: it is the direction the backtest
+     measures and the one "copy this member" usually means. #}
+  <div class="tabs">
+    <a href="/members?sort=buy" class="{{ 'active' if sort == 'buy' }}">At buying</a>
+    <a href="/members?sort=sell" class="{{ 'active' if sort == 'sell' }}">At selling</a>
+    <a href="/members?sort=all" class="{{ 'active' if sort == 'all' }}">Both together</a>
+    <a href="/members?sort=trades" class="{{ 'active' if sort == 'trades' }}">By activity</a>
+  </div>
+</div>
+
+{% if podium and sort in ('buy', 'sell', 'all') %}
+<section class="verdict">
+  <div class="verdict-head">
+    <h2>{{ 'Best at buying' if ranking_side == 'buy' else 'Best at selling' if ranking_side == 'sell' else 'Best overall' }}</h2>
+    {% if ranking_side == 'buy' and bands.get('1-3') %}
+    {% set top = bands['1-3'] %}
+    <p class="verdict-claim">
+      Buying what ranks 1&ndash;3 bought {{ top.verdict }} across {{ top.positions }} past
+      purchases: <strong class="{{ 'pos' if top.mean_excess > 0 else 'neg' }}">{{ top.mean_excess|pct }}</strong>
+      mean excess, beating it <strong>{{ top.beat_rate|rate }}</strong> of the time.
+      {% if bands._shape.best_is_top and not bands._shape.monotone %}
+      It is the best of the three bands, but the ranking below it is not a gradient &mdash;
+      ranks 7 and lower did better than ranks 4 to 6. Treat the cut as a cut, not as a
+      slope you can slide down.
+      {% elif bands._shape.monotone %}
+      And the bands below it fall in order, which is what makes the cut a cut rather than
+      an arbitrary line.
+      {% else %}
+      Read the bands below before treating this as a ranking: they do not fall in order.
+      {% endif %}
+    </p>
+    {% elif ranking_side == 'sell' %}
+    <p class="verdict-claim">
+      Ranked by shrunk excess return on their <strong>sales</strong> over {{ horizon }} days,
+      signed by intent: a sale that dodged a fall scores positive.
+      <strong>The backtest does not cover this side.</strong> It takes buy positions only, so
+      the band results below are borrowed from the buy ranking and describe how well the
+      <em>scoring</em> separates members, not what copying these sales would have earned.
+    </p>
+    {% else %}
+    <p class="verdict-claim">
+      Ranked on buying and selling together over {{ horizon }} days. Useful for
+      &ldquo;who is a good decision-maker&rdquo; and misleading for &ldquo;whose buying should
+      I copy&rdquo;, because a member with no purchases at all can rank near the top.
+      {% if not bands.get('1-3') %}The board has not been backtested against the current data
+      yet, so treat this order as a hypothesis.{% endif %}
+    </p>
+    {% endif %}
+  </div>
+
+  {# Frames on a reel. The number is the rank and the rank is the point, so
+     the frame numbering carries information rather than decorating the row. #}
+  <div class="reel">
+    {% for member in podium %}
+    {% set score = member.score %}
+    <article class="frame {{ 'frame--thin' if member.thin }}">
+      <div class="frame-edge"><span class="frame-no">{{ '%03d'|format(member.rank) }}</span></div>
+      <div class="frame-body">
+        <h3 class="frame-name">
+          <a href="/members/{{ member.politician_id }}">{{ member.full_name }}</a>
+        </h3>
+        <p class="frame-seat">
+          {{ member.chamber }} &middot; {{ member.display_state or 'state unknown' }}
+          {% if member.party %}<span class="party party--{{ member.party|lower }}">{{ member.party[0] }}</span>{% endif %}
+        </p>
+
+        <p class="frame-score {{ 'pos' if score.score > 0 else 'neg' }}">{{ score.score|pct }}</p>
+        <p class="frame-score-label">
+          vs {{ settings.prices.benchmark_symbol }} over {{ horizon }} days, from the day each
+          trade became public
+        </p>
+
+        <dl class="frame-facts">
+          <dt>Scored {{ 'purchases' if ranking_side == 'buy' else 'sales' if ranking_side == 'sell' else 'trades' }}</dt>
+          <dd>{{ score.trades_scored }}</dd>
+          <dt>Beat the index</dt><dd>{{ score.win_rate|rate }}</dd>
+          <dt>Files within</dt><dd>{{ '%.0f'|format(score.average_reporting_lag_days) }} days</dd>
+          {# The other side of the same member, because a strong buyer who is a
+             poor seller is a different proposition from one who is good at both. #}
+          <dt>{{ 'At selling' if ranking_side == 'buy' else 'At buying' }}</dt>
+          {% set other = member.sell if ranking_side == 'buy' else member.buy %}
+          <dd>{% if other %}<span class="{{ 'pos' if other.score > 0 else 'neg' }}">{{ other.score|pct }}</span>
+            <span class="muted">over {{ other.trades_scored }}</span>
+            {% else %}<span class="muted">none on record</span>{% endif %}</dd>
+          {% if score.best_symbol %}
+          {# A "best call" that was a sale reads as a pick that rose, unless it
+             says otherwise. Green sold NGL before it fell 36%. #}
+          <dt>Best {{ 'sale' if score.best_symbol_side == 'sell' else 'buy' if score.best_symbol_side == 'buy' else 'call' }}</dt>
+          <dd><a href="/tickers/{{ score.best_symbol }}">{{ score.best_symbol }}</a>
+            {{ score.best_symbol_excess|pct }}</dd>
+          {% endif %}
+        </dl>
+
+        {% if member.one_sided %}
+        <p class="frame-caveat">
+          {% if member.one_sided == 'buy' %}
+          Every scored trade here is a purchase &mdash; nothing on record about how they sell.
+          {% else %}
+          <strong>Nothing to copy on the buy side.</strong> Every scored trade of theirs is a
+          sale, so the backtest above &mdash; which only ever takes buy positions &mdash;
+          contains none of their trades. They rank here for exits, not for picks.
+          {% endif %}
+        </p>
+        {% elif member.thin %}
+        <p class="frame-caveat">
+          Thin sample. {{ score.trades_scored }} trades is barely past the
+          {{ settings.ranking.min_trades_to_rank }} needed to rank, so shrinkage has already
+          pulled {{ score.raw_excess_return|pct }} down to {{ score.score|pct }} and the true
+          figure could still be either side of it. The rank is real; the confidence is not.
+        </p>
+        {% else %}
+        <p class="frame-caveat frame-caveat--ok">
+          {{ score.trades_scored }} scored trades is enough that shrinkage barely moves the
+          number: {{ score.raw_excess_return|pct }} raw becomes {{ score.score|pct }}.
+        </p>
+        {% endif %}
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<table class="table ranking">
+  <thead>
+    <tr>
+      <th class="num">Rank</th>
+      <th>Member</th>
+      <th class="num">{{ 'At buying' if ranking_side == 'buy' else 'At selling' if ranking_side == 'sell' else 'Overall' }}</th>
+      <th>Evidence behind it</th>
+      <th class="num">Other side</th>
+      <th class="num">Files within</th>
+      <th>Best call</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for member in members %}
+    {% set score = member.score %}
+
+    {# The band rules. Physically drawn across the table because they are the
+       one thing a reader has to see: below each one, the measured result of
+       copying is different, and below the second it is negative. #}
+    {% if ranking_side == 'buy' and member.rank == 4 and bands.get('4-6') %}
+    <tr class="bandrule bandrule--even">
+      <td colspan="7">
+        <span class="bandrule-cut">Ranks 4&ndash;6</span>
+        Buying what this band bought {{ bands['4-6'].verdict }}:
+        {{ bands['4-6'].mean_excess|pct }} mean over {{ bands['4-6'].positions }} positions,
+        beating it {{ bands['4-6'].beat_rate|rate }} of the time.
+      </td>
+    </tr>
+    {% endif %}
+    {% if ranking_side == 'buy' and member.rank == 7 and bands.get('7+') %}
+    <tr class="bandrule bandrule--under">
+      <td colspan="7">
+        <span class="bandrule-cut">Ranks 7 and below</span>
+        Buying what this band bought {{ bands['7+'].verdict }}:
+        {{ bands['7+'].mean_excess|pct }} mean over {{ bands['7+'].positions }} positions,
+        beating it {{ bands['7+'].beat_rate|rate }} of the time.
+        {% if bands['7+'].mean_excess > (bands['4-6'].mean_excess if bands.get('4-6') else 0) %}
+        Note that this is <em>better</em> than the band above it. The ranking separates the
+        top from the rest; it does not order the rest.
+        {% endif %}
+      </td>
+    </tr>
+    {% endif %}
+
+    <tr class="{{ 'is-top' if member.get('rank', 99) <= 3 and sort != 'trades' }}">
+      <td class="num">
+        {% if member.get('rank') and sort != 'trades' %}
+        <span class="rank {{ 'rank--top' if member.rank <= 3 }}">{{ member.rank }}</span>
+        {% else %}<span class="muted">&mdash;</span>{% endif %}
+      </td>
+      <td>
+        <a href="/members/{{ member.politician_id }}">{{ member.full_name }}</a>
+        {% if member.party %}<span class="party party--{{ member.party|lower }}">{{ member.party[0] }}</span>{% endif %}
+        {% if member.thin %}<span class="flag-thin" title="Few enough scored trades that shrinkage is doing most of the work; the rank is real, the precision is not">thin sample</span>{% endif %}
+        {% if member.one_sided == 'sell' %}<span class="flag-thin" title="Every scored trade of theirs is a sale. The backtest only takes buy positions, so none of their trades are in it.">sells only</span>{% endif %}
+        {% if member.one_sided == 'buy' %}<span class="flag-thin flag-thin--quiet" title="No scored sales on record — nothing is known about how they exit.">buys only</span>{% endif %}
+        <span class="lots">{{ member.chamber }} &middot; {{ member.display_state or 'state unknown' }}
+          {%- if not member.bioguide_id %} &middot; <span title="No match on the current congressional roster, so no party, photo or committee membership. Deliberately not guessed.">off the roster</span>{% endif %}</span>
+      </td>
+      {% if score and score.rankable %}
+      <td class="num">
+        <span class="exposure {{ 'exposure--pos' if score.score > 0 else 'exposure--neg' }}">{{ score.score|pct }}</span>
+        {# Relative standing, drawn. A column of percentages between +10% and
+           -12% does not show that the first three are a different animal. #}
+        <span class="scorebar"><em class="{{ 'scorebar--neg' if score.score < 0 }}"
+              style="width: {{ member.bar }}%"></em></span>
+      </td>
+      <td class="small">
+        {{ score.trades_scored }} scored
+        {{ 'purchases' if ranking_side == 'buy' else 'sales' if ranking_side == 'sell' else 'trades' }}
+        &middot; {{ score.win_rate|rate }} beat {{ settings.prices.benchmark_symbol }}
+        <span class="lots">median {{ score.median_excess_return|pct }} &middot; {{ score.raw_excess_return|pct }} before shrinkage
+          {%- if score.trades_unpriced %} &middot; <span title="No provider could price these, so they are in none of the figures on this row. Usually a company since acquired or delisted.">{{ score.trades_unpriced }} unpriceable</span>{% endif %}</span>
+      </td>
+      {% set other = member.sell if ranking_side == 'buy' else member.buy %}
+      <td class="num small">
+        {% if other %}
+        <span class="{{ 'pos' if other.score > 0 else 'neg' }}">{{ other.score|pct }}</span>
+        <span class="lots">{{ 'selling' if ranking_side == 'buy' else 'buying' }}, {{ other.trades_scored }} scored</span>
+        {% else %}<span class="muted">&mdash;</span>{% endif %}
+      </td>
+      <td class="num muted">{{ '%.0f'|format(score.average_reporting_lag_days) }}d</td>
+      <td>
+        {% if score.best_symbol %}
+        <a href="/tickers/{{ score.best_symbol }}">{{ score.best_symbol }}</a>
+        <span class="lots">{{ score.best_symbol_excess|pct }} vs index</span>
+        {% else %}<span class="muted">&mdash;</span>{% endif %}
+      </td>
+      {% else %}
+      <td class="muted small" colspan="5">
+        {% if score %}
+        Only {{ score.trades_scored }} scored
+        {{ 'purchase' if ranking_side == 'buy' else 'sale' if ranking_side == 'sell' else 'trade' }}{{ '' if score.trades_scored == 1 else 's' }}
+        &mdash; below the {{ settings.ranking.min_trades_to_rank }} needed to rank, so no score
+        is shown rather than a number three trades wide.
+        {% else %}No priced
+        {{ 'purchases' if ranking_side == 'buy' else 'sales' if ranking_side == 'sell' else 'trades' }}
+        yet.{% endif %}
+      </td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if not members %}<p class="muted">No members yet. Run a refresh to pull filings.</p>{% endif %}
+
+<section class="card">
+  <p class="muted small">
+    The score is shrunk toward zero in proportion to how little evidence backs it, so a
+    member with four lucky trades does not outrank one with forty consistent ones. It is
+    signed by intent: a sale that dodged a fall counts as much as a purchase that beat the
+    index &mdash; which is exactly why buying and selling are ranked separately here. A
+    member can rank near the top of the combined list without ever having bought anything.
+    <strong>None of this is advice</strong>, and a rank measured on the past is not a
+    promise about the next filing &mdash;
+    <a href="/evidence">what the measurement does not prove</a> is written down.
+  </p>
+</section>
+{% endblock %}

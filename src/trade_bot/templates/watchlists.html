@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% set active = "watchlists" %}
+{% block title %}Watchlists · Copy Trade{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Watchlists</h1>
+    <p class="lede">
+      Mirror a member&rsquo;s trades into a notional portfolio. Fills are priced at the
+      <strong>disclosure</strong> date &mdash; the first day you could have acted, never the
+      price the member got. No broker is involved and no order is ever placed; this is a
+      measurement of what following someone would have done, not a way of doing it.
+    </p>
+  </div>
+</div>
+
+{% for row in rows %}
+{% set portfolio = row.portfolio %}
+<section class="card watchlist">
+  <div class="watchlist-head">
+    <div>
+      <h2>{{ portfolio.name }}</h2>
+      <p class="muted small">
+        {{ row.watchlist.politician_ids|length }} member{{ '' if row.watchlist.politician_ids|length == 1 else 's' }} ·
+        {{ row.watchlist.allocation_mode|replace('_',' ') }} · {{ row.watchlist.allocation_value|money }} per trade ·
+        {{ portfolio.fill_count }} fills
+      </p>
+    </div>
+    {% if not static_export %}
+    <div class="watchlist-actions">
+      <form method="post" action="/watchlists/{{ row.watchlist.watchlist_id }}/refresh" class="inline">
+        <button class="btn">Re-mirror</button>
+      </form>
+      <form method="post" action="/watchlists/{{ row.watchlist.watchlist_id }}/delete" class="inline">
+        <button class="btn btn--danger">Delete</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="stat-row">
+    <div class="stat"><span class="stat-value {{ 'pos' if portfolio.total_return > 0 else 'neg' }}">{{ portfolio.total_return|pct }}</span><span class="stat-label">total return</span></div>
+    <div class="stat"><span class="stat-value">{{ portfolio.equity|money }}</span><span class="stat-label">equity</span></div>
+    <div class="stat"><span class="stat-value {{ 'pos' if portfolio.unrealized_pnl > 0 else 'neg' }}">{{ portfolio.unrealized_pnl|money }}</span><span class="stat-label">unrealised</span></div>
+    <div class="stat"><span class="stat-value {{ 'pos' if portfolio.realized_pnl > 0 else 'neg' }}">{{ portfolio.realized_pnl|money }}</span><span class="stat-label">realised</span></div>
+    <div class="stat"><span class="stat-value">{{ portfolio.cash|money }}</span><span class="stat-label">cash</span></div>
+  </div>
+
+  {% if portfolio.positions %}
+  <table class="table table--compact ledger">
+    <thead><tr><th>Symbol</th><th class="num">Shares</th><th class="num">Avg cost</th><th class="num">Last</th><th class="num">Value</th><th class="num">Unrealised</th><th class="num">Return</th><th>Opened</th></tr></thead>
+    <tbody>
+      {% for position in portfolio.positions %}
+      <tr>
+        <td><a href="/tickers/{{ position.symbol }}"><strong>{{ position.symbol }}</strong></a></td>
+        <td class="num">{{ '%.2f'|format(position.shares) }}</td>
+        <td class="num">{{ position.average_cost|money }}</td>
+        <td class="num">{{ position.last_price|money }}</td>
+        <td class="num">{{ position.market_value|money }}</td>
+        <td class="num {{ 'pos' if (position.unrealized_pnl or 0) > 0 else 'neg' }}">{{ position.unrealized_pnl|money }}</td>
+        <td class="num {{ 'pos' if (position.unrealized_return or 0) > 0 else 'neg' }}">{{ position.unrealized_return|pct }}</td>
+        <td class="muted">{{ position.opened_on or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No open positions. Re-mirror after the next disclosure sync.</p>
+  {% endif %}
+  {% if portfolio.unpriced_trades %}
+  <p class="muted small">
+    {{ portfolio.unpriced_trades }} disclosed trade{{ '' if portfolio.unpriced_trades == 1 else 's' }}
+    could not be priced and {{ 'was' if portfolio.unpriced_trades == 1 else 'were' }} skipped rather
+    than filled at a guess.
+  </p>
+  {% endif %}
+</section>
+{% endfor %}
+
+{% if static_export %}
+<section class="card">
+  <h2>Follow a member</h2>
+  <p class="muted">
+    Creating and mirroring watchlists needs the running app &mdash;
+    <code>trade-bot serve</code> locally, or a hosted instance.
+  </p>
+</section>
+{% else %}
+<section class="card">
+  <h2>Follow a member</h2>
+  <form method="post" action="/watchlists/create" class="stack">
+    <label>Name <input type="text" name="name" placeholder="Top performers" required /></label>
+    <label>Members to copy
+      <select name="politician_ids" multiple size="12" required>
+        {% for member in members %}
+        {% set score = scores.get(member.politician_id) %}
+        <option value="{{ member.politician_id }}">
+          {{ member.full_name }}{% if member.party %} ({{ member.party[:1] }}){% endif %}
+          {%- if score and score.rankable %} — {{ score.score|pct }} over {{ score.trades_scored }} trades{% endif %}
+        </option>
+        {% endfor %}
+      </select>
+      <span class="hint">Cmd-click to pick several.</span>
+    </label>
+    <div class="field-row">
+      <label>Allocation
+        <select name="allocation_mode">
+          <option value="fixed_dollars">fixed dollars per trade</option>
+          <option value="proportional_to_amount">proportional to their disclosed size</option>
+          <option value="percent_of_equity">percent of equity</option>
+        </select>
+      </label>
+      <label>Amount <input type="number" name="allocation_value" value="1000" step="100" min="1" /></label>
+      <label class="check"><input type="checkbox" name="mirror_sells" value="true" checked /> mirror their sells</label>
+    </div>
+    <button type="submit" class="btn btn--primary">Create watchlist</button>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

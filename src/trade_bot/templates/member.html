@@ -1,0 +1,223 @@
+{% extends "base.html" %}
+{% set active = "members" %}
+{% block title %}{{ member.full_name }} · Copy Trade{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div class="member-head">
+    {% if member.photo_url %}<img class="avatar" src="{{ member.photo_url }}" alt="" loading="lazy" />{% endif %}
+    <div>
+      <h1>{{ member.full_name }}</h1>
+      <p class="lede">
+        {{ member.chamber|capitalize }} · {{ member.display_state }}
+        {% if member.party %} · {{ member.party }}{% endif %}
+      </p>
+    </div>
+  </div>
+  <div class="stat-row">
+    <div class="stat"><span class="stat-value">{{ trades|length }}</span><span class="stat-label">disclosures</span></div>
+    <div class="stat"><span class="stat-value {{ 'pos' if summary.mean_excess > 0 else 'neg' }}">{{ summary.mean_excess|pct }}</span><span class="stat-label">avg excess ({{ horizon }}d)</span></div>
+    <div class="stat"><span class="stat-value">{{ '%.0f%%'|format(summary.win_rate * 100) }}</span><span class="stat-label">beat benchmark</span></div>
+  </div>
+</div>
+
+{% if positions %}
+<section class="card">
+  <div class="section-head">
+    <h2>Open positions, as far as the filings show</h2>
+    <span class="muted small">Largest net disclosed exposure first.</span>
+  </div>
+  <p class="muted small">
+    Every disclosure on this page folded into a running position per holding.
+    Congress reports brackets rather than share counts, so exposure is the sum
+    of the midpoints and the range beneath it is the same walk done with the
+    floors and ceilings. <em>Round trip</em> means they sold at least as much
+    as they were ever seen buying, not that they hold none; <em>selling
+    down</em> means sales only, on a position nothing here watched them build.
+  </p>
+  <table class="ledger">
+    <thead>
+      <tr>
+        <th>Holding</th>
+        <th>Doing what</th>
+        <th class="num">Net disclosed</th>
+        <th>Sequence</th>
+        <th class="num">A copier would be</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for position in positions %}
+      <tr>
+        <td>
+          <a href="/tickers/{{ position.symbol }}"><strong>{{ position.symbol }}</strong></a>
+          {% if position.industry %}<span class="lots">{{ position.industry }}</span>{% endif %}
+          {% for seat in position.committees %}
+          <span class="remit" title="{{ seat.committee_name }} covers {{ seat.jurisdiction }}">on the overseeing committee</span>
+          {% endfor %}
+        </td>
+        <td><span class="flow flow--{{ position.direction }}">{{ position.direction|replace('_', ' ') }}</span></td>
+        <td class="num">
+          <span class="exposure {{ 'exposure--pos' if position.net_exposure > 0 else ('exposure--neg' if position.net_exposure < 0 else '') }}"
+                title="Sum of the disclosed bracket midpoints, buys less sales. An estimate built on estimates; the range beneath it is what the filings actually bound.">
+            {{ position.net_exposure|money }}</span>
+          <span class="exposure-bounds">{{ position.net_low|money }} to {{ position.net_high|money }}</span>
+        </td>
+        <td class="small">
+          {{ position.buy_count }} buy{{ '' if position.buy_count == 1 else 's' }}{% if position.sell_count %},
+          {{ position.sell_count }} sale{{ '' if position.sell_count == 1 else 's' }}{% endif %}
+          <span class="lots">first filed {{ position.first_seen|shortdate }}</span>
+        </td>
+        <td class="num">
+          {% if position.unrealized_return is not none %}
+          <span class="ret-yours {{ 'pos' if position.unrealized_return > 0 else 'neg' }}">{{ position.unrealized_return|pct }}</span>
+          <span class="ret-basis">from {{ position.copier_basis|money }}</span>
+          {% else %}<span class="muted">&mdash;</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if seats %}
+<section class="card">
+  <h2>Committees</h2>
+  <p class="remit-note">
+    Shown because a member trading a company their committee oversees is worth
+    reading more slowly &mdash; not because it implies anything. Only committees
+    with a clear market remit are matched against holdings; broad ones like Ways
+    and Means are deliberately left unmatched.
+  </p>
+  <p>
+    {% for seat in seats %}
+    <span class="remit" title="{{ seat.jurisdiction or 'no market remit is mapped for this committee' }}">
+      {{ seat.committee_name }}{% if seat.title %} &mdash; {{ seat.title }}{% endif %}</span>
+    {% endfor %}
+  </p>
+</section>
+{% endif %}
+
+{% if scores %}
+<section class="card">
+  <div class="section-head">
+    <h2>Record by horizon</h2>
+    <span class="muted small">Buying and selling kept apart: they routinely disagree.</span>
+  </div>
+  <table class="table table--compact">
+    <thead>
+      <tr>
+        <th>Horizon</th>
+        <th class="num">At buying</th>
+        <th class="num">At selling</th>
+        <th class="num">Both together</th>
+        <th class="num">Win rate</th>
+        <th>Best call</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in scores %}
+      {% set overall = row.all %}
+      <tr>
+        <td>{{ row.horizon_days }} days</td>
+        {% for side in ['buy', 'sell', 'all'] %}
+        {% set s = row.get(side) %}
+        <td class="num">
+          {% if s %}
+          <span class="{{ 'pos' if s.score > 0 else 'neg' }}">{{ s.score|pct }}</span>
+          <span class="lots">{{ s.trades_scored }} scored</span>
+          {% else %}<span class="muted">none</span>{% endif %}
+        </td>
+        {% endfor %}
+        <td class="num">{{ overall.win_rate|rate }}
+          {% if overall.trades_unpriced %}
+          <span class="lots" title="Actionable trades of theirs no provider could price — usually a company since acquired, delisted or renamed. They are in none of the figures on this row.">{{ overall.trades_unpriced }} unpriceable</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if overall.best_symbol %}
+          <a href="/tickers/{{ overall.best_symbol }}">{{ overall.best_symbol }}</a>
+          <span class="lots">{{ overall.best_symbol_excess|pct }}
+            {{ 'on a sale' if overall.best_symbol_side == 'sell' else 'on a buy' if overall.best_symbol_side == 'buy' else '' }}</span>
+          {% else %}<span class="muted">&mdash;</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">
+    Signed by intent, so a sale that dodged a fall scores positive just as a purchase that
+    beat the index does. The two columns are separate because a member can be reliably good
+    at one and reliably poor at the other, and the combined figure describes neither.
+    <strong>Only the buy side has been backtested</strong> &mdash;
+    <a href="/evidence">see what that covers</a>.
+  </p>
+</section>
+{% endif %}
+
+<div class="two-col">
+  <section class="card">
+    <h2>Disclosed trades</h2>
+    <table class="buyers table--compact">
+      <thead><tr>
+        <th>Holding</th>
+        <th>Traded &rarr; filed</th>
+        <th class="num">Size as filed</th>
+        <th class="num">Since filed</th>
+      </tr></thead>
+      <tbody>
+        {% for trade in trades[:120] %}
+        {% set perf = performance.get(trade.trade_id) %}
+        <tr>
+          <td data-label="Holding">
+            {% if trade.symbol %}<a href="/tickers/{{ trade.symbol }}">{{ trade.symbol }}</a>
+            {% else %}<span class="muted" title="{{ trade.asset_name }}">{{ trade.asset_name[:30] }}</span>{% endif %}
+            <span class="tag tag--{{ 'buy' if 'purchase' in trade.transaction_type else 'sell' }}">{{ trade.transaction_type|replace('_', ' ') }}</span>
+          </td>
+          <td data-label="Traded then filed">
+            <span class="lag {{ 'lag--suspect' if trade.reporting_lag_days > MAX_LAG_DAYS }}"
+                  title="{% if trade.reporting_lag_days > MAX_LAG_DAYS %}Beyond any honest lateness — the transaction date is a misread, so no member return is priced from it{% else %}{{ trade.reporting_lag_days }} days before this was public{% endif %}">
+              <em style="width: {{ [trade.reporting_lag_days, 90]|min }}px"></em>+{{ trade.reporting_lag_days }}d
+              {%- if trade.reporting_lag_days > MAX_LAG_DAYS %} &#9873;{% endif %}
+            </span>
+            <span class="lag-dates">{{ trade.transaction_date|shortdate }} &rarr; {{ trade.disclosure_date|shortdate }}</span>
+          </td>
+          <td class="num" data-label="Size as filed">
+            <span class="band">{{ trade.amount_low|band_letter }}</span>
+            <span class="band-range">{{ trade.amount_low|bracket(trade.amount_high) }}</span>
+          </td>
+          {# The copier's return leads, signed by intent: a sale followed by a
+             rise counts against the member, because that is what they gave up.
+             What they captured before filing was never available to anyone
+             else, so it stays as context. #}
+          <td class="num" data-label="Since filed">
+            {% if perf and perf.priced %}
+            <span class="ret-yours {{ 'pos' if (perf.result_return or 0) > 0 else 'neg' }}"
+                  title="{{ trade.symbol }} moved {{ perf.achievable_return|pct }} since the filing{{ ', which a seller gives up' if 'purchase' not in trade.transaction_type }}">{{ perf.result_return|pct }}</span>
+            <span class="ret-theirs">{{ perf.member_return|pct }} price move since they traded ·
+              {{ perf.excess_return|pct }} vs {{ settings.prices.benchmark_symbol }}</span>
+            {% else %}<span class="muted">{{ perf.note if perf else 'not priced' }}</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>Recent coverage</h2>
+    {% if news %}
+    <ul class="news-list">
+      {% for story in news %}
+      <li>
+        <a href="{{ story.url }}" target="_blank" rel="noopener">{{ story.title }}</a>
+        <span class="news-meta">
+          <span class="sentiment sentiment--{{ story.sentiment_label }}">{{ story.sentiment_label }}</span>
+          {{ story.source }} · {{ story.published_at|ago }}
+        </span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted">No coverage stored for this member yet.</p>{% endif %}
+  </section>
+</div>
+{% endblock %}

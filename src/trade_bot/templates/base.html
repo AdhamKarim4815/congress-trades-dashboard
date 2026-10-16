@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Congress Copy-Trading{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  {# Runs before the body paints, so choosing dark never flashes paper first.
+     Deliberately not behind a static_export guard: it touches no server and
+     has to work in the published snapshot exactly as it does here. #}
+  <script>
+    try {
+      var t = localStorage.getItem("theme");
+      if (t) document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">
+      <span class="brand-mark"></span>
+      <span>Copy&thinsp;Trade</span>
+    </a>
+    <nav>
+      <a href="/" class="{{ 'active' if active == 'board' }}">Board</a>
+      <a href="/digest" class="{{ 'active' if active == 'digest' }}">Digest</a>
+      <a href="/evidence" class="{{ 'active' if active == 'evidence' }}">Evidence</a>
+      <a href="/members" class="{{ 'active' if active == 'members' }}">Members</a>
+      <a href="/trades" class="{{ 'active' if active == 'trades' }}">Trades</a>
+      <a href="/watchlists" class="{{ 'active' if active == 'watchlists' }}">Watchlists</a>
+      <a href="/politics" class="{{ 'active' if active == 'politics' }}">Politics</a>
+      <a href="/news" class="{{ 'active' if active == 'news' }}">News</a>
+      <a href="/data" class="{{ 'active' if active == 'data' }}">Data</a>
+    </nav>
+    <div class="topbar-right">
+      <button type="button" class="theme-toggle" id="theme-toggle"
+              aria-label="Switch between paper and microfilm">paper</button>
+      {% if static_export %}
+      {# Resolved at export time: no script runs in a snapshot, so a
+         placeholder here would read "market …" forever. #}
+      <span class="badge {{ 'badge--open' if static_market and static_market.open else 'badge--closed' }}">
+        market {{ 'open' if static_market and static_market.open else 'closed' }}
+      </span>
+      {% else %}
+      <span id="market-badge" class="badge badge--muted">market …</span>
+      {% endif %}
+      {% if not static_export %}
+      {# Two steps on purpose. A refresh re-reads every filing index, re-fetches
+         prices, and can send scanned filings to a paid vision model, so it is
+         not something to set off by brushing a button in the corner. Built as
+         <details> rather than a confirm() dialog: a native dialog blocks the
+         page until dismissed and cannot be styled. #}
+      <details class="confirm">
+        <summary class="btn btn--primary" role="button">Refresh all</summary>
+        <div class="confirm-panel">
+          <p class="confirm-title">Run a full refresh?</p>
+          <ul class="confirm-list">
+            <li>Re-reads the House and Senate filing indexes</li>
+            <li>Re-fetches prices for every tracked symbol</li>
+            <li>Reads up to 8 scanned filings, which costs a few cents</li>
+            <li>Takes roughly 25 minutes; the status bar shows where it is</li>
+          </ul>
+          <p class="confirm-note">It already runs on its own once a day, after the
+            US close. You only need this to pull something in early.</p>
+          <form method="post" action="/actions/refresh">
+            <button type="submit" class="btn btn--primary" id="refresh-btn">Yes, refresh now</button>
+          </form>
+        </div>
+      </details>
+      {% endif %}
+    </div>
+  </header>
+
+  {% if static_export %}
+  <!-- Published snapshot: there is no server here to report progress. -->
+  <div class="statusbar statusbar--idle">
+    <span class="statusbar-dot"></span>
+    <span class="statusbar-channel">snapshot</span>
+    <span class="statusbar-message">
+      Published {{ exported_at|ago }}. Read-only &mdash; run the app locally to refresh or edit watchlists.
+    </span>
+  </div>
+  {% else %}
+  <!-- Live status bar: driven by /api/activity/stream (SSE). -->
+  <div id="statusbar" class="statusbar statusbar--idle">
+    <span class="statusbar-dot"></span>
+    <span id="statusbar-channel" class="statusbar-channel">idle</span>
+    <span id="statusbar-message" class="statusbar-message">Ready.</span>
+    <span id="statusbar-progress" class="statusbar-progress"></span>
+    <div class="statusbar-track"><div id="statusbar-fill" class="statusbar-fill"></div></div>
+    <button type="button" id="log-toggle" class="statusbar-toggle" aria-expanded="false">Log</button>
+  </div>
+  <div id="activity-log" class="activity-log" hidden></div>
+  {% endif %}
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  <script>
+    // Paper or microfilm. Reads the resolved theme rather than assuming light,
+    // so the first click always flips what the reader is actually looking at.
+    (function () {
+      var btn = document.getElementById("theme-toggle");
+      if (!btn) return;
+      var root = document.documentElement;
+      function current() {
+        return root.getAttribute("data-theme") ||
+          (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      }
+      function label() { btn.textContent = current() === "dark" ? "microfilm" : "paper"; }
+      btn.addEventListener("click", function () {
+        var next = current() === "dark" ? "light" : "dark";
+        root.setAttribute("data-theme", next);
+        try { localStorage.setItem("theme", next); } catch (e) {}
+        label();
+      });
+      label();
+    })();
+  </script>
+
+  {% if not static_export %}
+  <script>
+    (function () {
+      const bar = document.getElementById("statusbar");
+      const channel = document.getElementById("statusbar-channel");
+      const message = document.getElementById("statusbar-message");
+      const progress = document.getElementById("statusbar-progress");
+      const fill = document.getElementById("statusbar-fill");
+      const log = document.getElementById("activity-log");
+      const toggle = document.getElementById("log-toggle");
+      let wasBusy = false;
+
+      toggle.addEventListener("click", () => {
+        const open = log.hasAttribute("hidden");
+        if (open) { log.removeAttribute("hidden"); } else { log.setAttribute("hidden", ""); }
+        toggle.setAttribute("aria-expanded", String(open));
+      });
+
+      function applyStatus(status) {
+        if (!status) return;
+        bar.className = "statusbar " + (status.busy ? "statusbar--busy" : "statusbar--idle");
+        channel.textContent = status.channel || "idle";
+        message.textContent = status.message || "Ready.";
+        if (status.busy && status.total) {
+          progress.textContent = status.current + " / " + status.total;
+          fill.style.width = (status.percent || 0) + "%";
+        } else {
+          progress.textContent = status.busy && status.elapsed_seconds
+            ? status.elapsed_seconds + "s" : "";
+          fill.style.width = status.busy ? "100%" : "0%";
+        }
+        // Reload once work finishes so the page shows the new data.
+        if (wasBusy && !status.busy) { setTimeout(() => window.location.reload(), 800); }
+        wasBusy = status.busy;
+      }
+
+      function appendEvents(events) {
+        for (const event of events) {
+          const row = document.createElement("div");
+          row.className = "activity-row activity-row--" + event.level;
+          const time = new Date(event.at).toLocaleTimeString();
+          row.textContent = `${time}  [${event.channel}] ${event.message}`;
+          if (event.detail) { row.title = event.detail; }
+          log.prepend(row);
+        }
+        while (log.childElementCount > 200) { log.removeChild(log.lastChild); }
+      }
+
+      let cursor = 0;
+      function connect() {
+        const source = new EventSource("/api/activity/stream?since=" + cursor);
+        source.onmessage = (raw) => {
+          const payload = JSON.parse(raw.data);
+          cursor = payload.last_id || cursor;
+          if (payload.events && payload.events.length) { appendEvents(payload.events); }
+          applyStatus(payload.status);
+        };
+        // EventSource retries on its own, but a hard error needs a fresh
+        // connection that resumes from the cursor we already have.
+        source.onerror = () => { source.close(); setTimeout(connect, 3000); };
+      }
+      connect();
+
+      fetch("/api/status").then((r) => r.json()).then((data) => {
+        const badge = document.getElementById("market-badge");
+        const open = data.market && data.market.open;
+        badge.textContent = "market " + (open ? "open" : "closed");
+        badge.className = "badge " + (open ? "badge--open" : "badge--closed");
+        badge.title = (data.market && data.market.reason) || "";
+      }).catch(() => {});
+    })();
+  </script>
+  {% endif %}
+  {% block scripts %}{% endblock %}
+</body>
+</html>

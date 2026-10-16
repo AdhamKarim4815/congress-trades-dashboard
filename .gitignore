@@ -1,0 +1,24 @@
+.venv/
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+.env
+.env.*
+!.env.example
+*.log
+
+# Runtime cache and local data: filings, prices, OCR reads, reports, models,
+# the SQLite database. Everything under var/ is created at runtime and
+# regenerates, so none of it is tracked.
+var/
+
+# The rendered static snapshot, built by `trade-bot export`.
+dist/
+artifacts/
+
+electron/node_modules/
+.wrangler/
+.claude/

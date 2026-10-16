@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+{% set active = "data" %}
+{% block title %}Data · Copy Trade{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Data &amp; sources</h1><p class="lede">What has been ingested, from where, what failed &mdash; and what does not look right.</p></div>
+</div>
+
+<div class="stat-row stat-row--wide">
+  <div class="stat"><span class="stat-value">{{ counts.total }}</span><span class="stat-label">disclosed trades</span></div>
+  <div class="stat"><span class="stat-value">{{ counts.actionable }}</span><span class="stat-label">tradeable</span></div>
+  <div class="stat"><span class="stat-value">{{ counts.members }}</span><span class="stat-label">members</span></div>
+  <div class="stat"><span class="stat-value">{{ filings.parsed }}/{{ filings.total }}</span><span class="stat-label">filings parsed</span></div>
+  <div class="stat"><span class="stat-value">{{ coverage.symbols }}/{{ symbols_wanted }}</span><span class="stat-label">symbols priced</span></div>
+  <div class="stat"><span class="stat-value">{{ news_counts.values()|sum }}</span><span class="stat-label">headlines</span></div>
+</div>
+
+{# The stage that judges the data rather than the code. Placed first because
+   every defect this project has shipped was visible in rendered data while
+   the test suite stayed green. #}
+<section class="card">
+  <div class="section-head">
+    <h2>Plausibility checks</h2>
+    {% if validation %}
+    <span class="check-tally">
+      <span class="pill {{ 'pill--bad' if validation.errors else 'pill--ok' }}">{{ validation.errors }} error{{ '' if validation.errors == 1 else 's' }}</span>
+      <span class="pill {{ 'pill--warn' if validation.warnings else '' }}">{{ validation.warnings }} warning{{ '' if validation.warnings == 1 else 's' }}</span>
+      <span class="pill">{{ validation.notes }} note{{ '' if validation.notes == 1 else 's' }}</span>
+    </span>
+    {% endif %}
+  </div>
+
+  {% if not validation %}
+  <p class="muted">
+    Not run yet. It runs as the last stage of every refresh, or on demand with
+    <code>trade-bot validate</code>.
+  </p>
+  {% else %}
+  <p class="muted small">
+    {{ validation.trades_checked }} trades and {{ validation.series_checked }} price series checked
+    {{ validation.generated_at|ago }}. Nothing here rewrites a row &mdash; it reports what does not add up.
+  </p>
+
+  {% if not validation.findings %}
+  <p class="pos">Every check passed.</p>
+  {% endif %}
+
+  {% for finding in validation.findings %}
+  <details class="finding finding--{{ finding.severity }}" {{ 'open' if finding.severity == 'error' }}>
+    <summary>
+      <span class="finding-grade">{{ finding.severity }}</span>
+      <span class="finding-title">{{ finding.title }}</span>
+      <code class="finding-code">{{ finding.code }}</code>
+    </summary>
+    <p class="finding-detail">{{ finding.detail }}</p>
+    {% if finding.samples %}
+    <table class="table table--compact">
+      <thead>
+        <tr>{% for key in finding.samples[0].keys() if key != 'source_url' %}<th>{{ key|replace('_', ' ') }}</th>{% endfor %}<th></th></tr>
+      </thead>
+      <tbody>
+        {% for sample in finding.samples %}
+        <tr>
+          {% for key, value in sample.items() if key != 'source_url' %}
+          <td class="small">
+            {%- if key == 'symbol' and value %}<a href="/tickers/{{ value }}">{{ value }}</a>
+            {%- elif key == 'politician_id' %}<a href="/members/{{ value }}">{{ value }}</a>
+            {%- else %}{{ value }}{% endif -%}
+          </td>
+          {% endfor %}
+          <td>{% if sample.source_url %}<a href="{{ sample.source_url }}" target="_blank" rel="noopener">filing</a>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if finding.count > finding.samples|length %}
+    <p class="muted small">Showing {{ finding.samples|length }} of {{ finding.count }}.</p>
+    {% endif %}
+    {% endif %}
+  </details>
+  {% endfor %}
+  {% endif %}
+</section>
+
+{% if not static_export %}
+<section class="card">
+  <h2>Run a targeted refresh</h2>
+  <p class="muted">Everything is free and keyless. Pick stages to run only part of the pipeline.</p>
+  <form method="post" action="/actions/refresh" class="stack">
+    <div class="stage-grid">
+      {% for stage in stages %}
+      <label class="check"><input type="checkbox" name="stages" value="{{ stage }}" /> {{ stage }}</label>
+      {% endfor %}
+    </div>
+    <label>Filing download cap <input type="number" name="filing_limit" value="0" min="0" step="25" />
+      <span class="hint">0 uses the configured default ({{ settings.disclosures.max_filings_per_sync }}).</span>
+    </label>
+    <button type="submit" class="btn btn--primary">Run selected stages</button>
+  </form>
+</section>
+{% endif %}
+
+{% if sync_state.sources %}
+<section class="card">
+  <h2>Sources</h2>
+  {# SEEN/PARSED/UNREADABLE describe *filings*, and the roster sources have no
+     filings at all -- they report what they changed in `details`. Reading only
+     the filing counters made a working roster sync and a dead one render
+     identically as three zeros, which is exactly how the senator enrichment
+     failed unnoticed for all 35 senators. #}
+  <table class="table table--compact">
+    <thead><tr><th>Source</th><th>Status</th><th>What it did</th><th>Detail</th></tr></thead>
+    <tbody>
+      {% for name, report in sync_state.sources.items() %}
+      {% set details = report.details or {} %}
+      {% set effect = report.filings_parsed + report.trades_added + report.politicians_added
+                      + (details.enriched or 0) + (details.committees or 0) %}
+      <tr>
+        <td><code>{{ name }}</code></td>
+        <td>
+          {% if not report.ok %}<span class="pill pill--bad">failed</span>
+          {% elif effect %}<span class="pill pill--ok">ok</span>
+          {% elif report.filings_seen %}<span class="pill">nothing new</span>
+          {% else %}<span class="pill pill--warn">no effect</span>{% endif %}
+        </td>
+        <td class="small">
+          {% if report.filings_seen or report.filings_parsed or report.filings_failed %}
+          <span class="fact">{{ report.filings_seen }} seen</span>
+          <span class="fact">{{ report.filings_parsed }} parsed</span>
+          {% if report.filings_failed %}<span class="fact fact--bad">{{ report.filings_failed }} unreadable</span>{% endif %}
+          {% endif %}
+          {% if report.trades_added %}<span class="fact">{{ report.trades_added }} trades</span>{% endif %}
+          {# The denominator is the members we track, never the size of
+             Congress. Nothing here creates a member: the set this application
+             cares about is exactly the set who have filed a transaction
+             report, so the sitting members who never have are not a gap. #}
+          {% if details.enriched %}
+          <span class="fact">{{ details.enriched }}{% if details.tracked %} of {{ details.tracked }} tracked{% endif %} members matched</span>
+          {% endif %}
+          {% if details.committees %}<span class="fact">{{ details.committees }} committee seats</span>{% endif %}
+          {% if details.unmatched_members %}<span class="fact fact--bad">{{ details.unmatched_members }} unmatched</span>{% endif %}
+          {% if not effect and report.ok and not report.filings_seen %}
+          <span class="muted">reported success and changed nothing</span>
+          {% endif %}
+        </td>
+        <td class="muted small">
+          {%- if report.error %}{{ report.error }}
+          {%- elif details.roster_size %}the roster lists {{ details.roster_size }} sitting
+            members; members who have never filed are not tracked and are not a gap
+          {%- else %}&mdash;{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Price providers</h2>
+  <p>Tried in order: {% for provider in providers %}<code>{{ provider }}</code>{{ ', ' if not loop.last }}{% endfor %}</p>
+  <p class="muted small">
+    {{ coverage.symbols }} series cached of {{ symbols_wanted }} tradeable symbols; last updated
+    {{ coverage.last_updated|ago }}. Closes are back-adjusted for splits &mdash; the plausibility
+    checks above re-verify that every run, because a provider that quietly stopped adjusting would
+    turn every return spanning a split into a phantom loss.
+  </p>
+</section>
+
+{% if failed_filings %}
+<section class="card">
+  <h2>Filings that could not be read ({{ failed_filings|length }})</h2>
+  <p class="muted">
+    Almost always scanned paper filings with no text layer. They are recorded rather than
+    dropped, so coverage gaps stay visible.
+  </p>
+  <table class="table table--compact">
+    <thead><tr><th>Filed</th><th>Member</th><th>Doc</th><th>Why</th></tr></thead>
+    <tbody>
+      {% for filing in failed_filings %}
+      <tr>
+        <td class="muted">{{ filing.filed_at }}</td>
+        <td><a href="/members/{{ filing.politician_id }}">{{ filing.politician_id }}</a></td>
+        <td><a href="{{ filing.source_url }}" target="_blank" rel="noopener">{{ filing.doc_id }}</a></td>
+        <td class="muted small">{{ filing.parse_error }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}

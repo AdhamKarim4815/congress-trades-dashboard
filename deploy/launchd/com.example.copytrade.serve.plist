@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The dashboard, kept alive.
+
+  Started by hand in a terminal, the dashboard dies when the terminal closes,
+  when you log out or when the Mac sleeps, with no indication of why. Worse,
+  a long-running process serves NEW templates
+  through OLD Python: Jinja reloads from disk and the module does not, so
+  editing a template filter can leave the site throwing 500s on the pages
+  that use it while the rest look fine.
+
+  KeepAlive fixes the first. The second is a deploy step, not a daemon
+  setting: after changing code, restart the agent with
+
+      launchctl kickstart -k gui/UID/com.example.copytrade.serve
+
+  Install with "trade-bot agents", which fills in the paths.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.example.copytrade.serve</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{python}</string>
+    <string>-m</string>
+    <string>trade_bot.cli</string>
+    <string>serve</string>
+  </array>
+  <key>WorkingDirectory</key><string>{root}</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <!-- Restarting faster than this means a crash loop burns the CPU rather
+       than surfacing as a site that is plainly down. -->
+  <key>ThrottleInterval</key><integer>15</integer>
+  <key>StandardOutPath</key><string>{root}/var/server.log</string>
+  <key>StandardErrorPath</key><string>{root}/var/server.log</string>
+  <key>ProcessType</key><string>Background</string>
+</dict>
+</plist>

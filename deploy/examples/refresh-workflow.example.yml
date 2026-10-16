@@ -1,0 +1,75 @@
+# EXAMPLE ONLY. Copy to .github/workflows/refresh.yml in your own fork to run
+# the pipeline on a schedule. It is not active in this repository.
+#
+# What it does: runs the Python pipeline (download and parse filings, fetch
+# prices, read news, score members) against a Postgres database you provide,
+# then renders a static snapshot with `trade-bot export` and keeps it as a
+# build artifact. Publishing the snapshot is left to you: upload the `dist`
+# folder to any static host (GitHub Pages, Cloudflare Pages, Netlify, S3, ...).
+#
+# Required repository secret:
+#   TRADE_BOT_DATABASE_URL  postgresql+psycopg://USER:PASSWORD@HOST:5432/DBNAME
+#
+# Optional repository secret:
+#   OPENAI_API_KEY          only used to read scanned paper filings
+name: Refresh and export
+
+on:
+  schedule:
+    # Once daily, after the US market close in both daylight and standard time.
+    - cron: "15 22 * * *"
+  workflow_dispatch:
+    inputs:
+      filing_limit:
+        description: "Cap new filings downloaded this run (0 = configured default)"
+        required: false
+        default: "0"
+
+concurrency:
+  group: refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # The `postgres` extra provides the driver for postgresql+psycopg URLs.
+      - run: uv sync --frozen --extra postgres --extra vision
+
+      # Prices and filing PDFs are expensive to refetch and never change once
+      # written, so they survive between runs.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            var/prices
+            var/filings
+            var/ocr
+          key: trade-bot-data-${{ github.run_id }}
+          restore-keys: trade-bot-data-
+
+      - name: Refresh
+        env:
+          TRADE_BOT_DATABASE_URL: ${{ secrets.TRADE_BOT_DATABASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          uv run trade-bot db-check
+          uv run trade-bot db-init
+          uv run trade-bot refresh --filings "${{ inputs.filing_limit || 0 }}"
+          uv run trade-bot status
+
+      - name: Export static snapshot
+        env:
+          TRADE_BOT_DATABASE_URL: ${{ secrets.TRADE_BOT_DATABASE_URL }}
+        run: uv run trade-bot export --out dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: snapshot
+          path: dist

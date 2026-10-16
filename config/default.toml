@@ -1,0 +1,66 @@
+# Copy-trading configuration.
+#
+# Everything here can also be overridden by environment variables using the
+# `TRADE_BOT_` prefix and `__` for nesting, e.g.
+# `TRADE_BOT_PRICES__BENCHMARK_SYMBOL=QQQ`.
+
+[disclosures]
+# Filing years to sync. Leave empty to track the current and previous year.
+#
+# Depth matters more than anything else here: member scores are shrunk by
+# sample size, so a member with 6 scored trades is barely rankable while one
+# with 60 is trusted near face value. Four years is ~1,750 reports and the
+# whole backfill takes a couple of minutes because downloads run in parallel
+# and are cached afterwards.
+house_years = [2023, 2024, 2025, 2026]
+senate_years = []
+# Cap on how many new PTR filings a single sync will download and parse.
+max_filings_per_sync = 2000
+request_timeout_seconds = 45.0
+max_concurrent_downloads = 8
+# Sent on every scrape. The House Clerk and Senate eFD both serve public
+# records; identifying the client is the polite way to consume them.
+user_agent = "trade-bot/0.2 (personal congressional-disclosure dashboard)"
+
+[prices]
+benchmark_symbol = "SPY"
+# Tried in order; the first that returns a usable series wins. All of these
+# are free; nasdaq/stooq/yahoo need no account at all, and twelve-data is
+# only attempted if you have stored a key on the Secrets page.
+provider_priority = ["nasdaq", "stooq", "yahoo", "twelve-data"]
+history_days = 1825
+cache_max_age_hours = 12.0
+
+[ranking]
+# How far back a member's record is scored over.
+lookback_days = 1095
+horizons_days = [30, 90, 180, 365]
+primary_horizon_days = 90
+# Members with fewer scored buys than this are listed but never ranked.
+min_trades_to_rank = 4
+# Bayesian shrinkage: a member needs roughly this many trades before their
+# raw average excess return is taken close to face value.
+shrinkage_prior_trades = 8.0
+
+[follow]
+default_allocation_mode = "fixed_dollars"
+default_allocation_dollars = 1000.0
+mirror_sells = true
+# Ignore disclosed trades whose lower amount bound is under this.
+min_amount_low = 1001.0
+
+[recommendations]
+# Only disclosures published within this many days can drive a recommendation.
+disclosure_window_days = 45
+max_results = 25
+# Conviction added when several ranked members buy the same ticker.
+cluster_weight = 0.35
+# Conviction added when a tracked political figure spoke about the ticker.
+politics_weight = 0.20
+
+[[politics.figures]]
+name = "Donald Trump"
+aliases = ["Trump", "President Trump", "Donald J. Trump"]
+feeds = [
+  "https://news.google.com/rss/search?q=%22Donald+Trump%22+(stock+OR+shares+OR+tariff+OR+company)&hl=en-US&gl=US&ceid=US:en",
+]
