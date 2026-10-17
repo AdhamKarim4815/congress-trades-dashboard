@@ -10,6 +10,8 @@ person, where would I be?"
 
 Everything runs at **zero cost with no API key**.
 
+![Pipeline from public disclosures to a ranked board, and the two dates that separate a member's return from a copier's](docs/how-it-works.png)
+
 ## Disclaimer
 
 This project is for educational and research purposes only. It is not
